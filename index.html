@@ -70,6 +70,14 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .menu-btn{right:16px}
 .snd-btn{top:auto;bottom:16px;right:16px}
 .voz-btn{top:auto;bottom:16px;right:60px}
+.dica-btn{top:auto;bottom:16px;right:104px}
+.dica-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.dica-btn[aria-pressed="true"]{background:var(--gold)}
+.dica-btn[aria-pressed="true"] svg{stroke:var(--btn-ink)}
+.dica{min-height:34px;margin-bottom:-6px;padding:7px 12px;border-radius:12px;background:var(--chip);color:var(--ink);font-size:13px;font-weight:700;line-height:1.3;display:flex;align-items:center;gap:8px}
+.dica::before{content:"💡";flex:none}
+.dica.vazia{visibility:hidden}
+.hand .card[data-hint]{box-shadow:0 0 0 3px var(--us),0 6px 14px rgba(0,0,0,.28)}
 .voz-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .snd-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
@@ -247,6 +255,7 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
   </header>
   <main class="table" id="table">
     <div class="vira" id="vira"></div>
+    <button class="tbtn dica-btn" id="dicaBtn" aria-label="Dicas"></button>
     <button class="tbtn voz-btn" id="vozBtn" aria-label="Vozes"></button>
     <button class="tbtn snd-btn" id="sndBtn" aria-label="Som"></button>
     <button class="tbtn menu-btn" id="menuBtn" aria-label="Menu">☰</button>
@@ -261,6 +270,7 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
     <div class="sheet" id="sheet" hidden></div>
     <div class="spect" id="spect" hidden>Assistindo · toque em ☰ para entrar numa vaga de bot</div>
   </main>
+  <div class="dica" id="dica" role="status" aria-live="polite" hidden></div>
   <section class="hand" id="hand" aria-label="Suas cartas"></section>
   <footer class="actions" id="actions"></footer>
 </div>
@@ -815,6 +825,75 @@ let MODE='solo', ME=0, IS_HOST=true, SEATS=[null,null,null,null], LOBBY=false, C
 let unsubPeers=null, lastAct={}, evLog=[], evSeq=0, lastEv=0, lastGid='', lastSt=null, actN=0, awaiting=false;
 let hostSeenAt=0, hostWatch=null, joinedAt=0, autoSeat=true, myWant=null, modalKind='', nick=store.get('truco.nick')||'';
 const VIEW=()=>ME>=0?ME:0;
+/* Modo Dicas: tudo calculado aqui, só com o que você já pode ver (sua mão, mesa, vira, consulta autorizada).
+   Nada disso vai para a mesa online. */
+let DICAS=store.get('truco.dicas')==='1', hintCache={key:''}, tempH=null, SEEN={h:-1,g:'',list:[],keys:new Set()}, viraHintHand='';
+const RANK_NOME={'1':'ás','2':'dois','3':'três','4':'quatro','5':'cinco','6':'seis','7':'sete','10':'dama','11':'valete','12':'rei'};
+const RANK_PLURAL={'1':'os 4 ases','2':'os 4 dois','3':'os 4 três','4':'os 4 quatros','5':'os 4 cincos','6':'os 4 seis','7':'os 4 setes','10':'as 4 damas','11':'os 4 valetes','12':'os 4 reis'};
+const MAN_NOME=['manilha de ouros','manilha de espadas','manilha de copas','zap'];
+const cardName=(c,man)=>c.r===man?MAN_NOME[c.s]:`${RANK_NOME[c.r]} de ${SUIT_NAMES[c.s]}`;
+function tempHint(t,ms){if(!DICAS)return;tempH={text:t,until:Date.now()+ms};renderDica();setTimeout(renderDica,ms+30);}
+function trackSeen(g){ // lembra as cartas abertas que passaram pela mesa nesta mão
+  const k=GID+'|'+g.handNo; if(SEEN.g!==k){SEEN={g:k,list:[],keys:new Set()};}
+  for(const t of g.table){if(t.hid||!t.card)continue;const id=t.seat+':'+ckey(t.card);if(!SEEN.keys.has(id)){SEEN.keys.add(id);SEEN.list.push({seat:t.seat,card:t.card});}}
+}
+function hintGame(g,v){
+  const pt=(ME+2)%4;
+  const hands=[0,1,2,3].map(s=>s===ME?v.own.slice():s===pt&&v.partner?v.partner.slice():Array(g.hands[s].length).fill(null));
+  return{hands,table:g.table.map(t=>t.hid?{seat:t.seat,card:{r:'?',s:0},hid:true}:t),results:g.results.slice(),manilha:g.manilha,vira:g.vira,
+    played:SEEN.list.slice(),turn:g.turn,scores:g.scores.slice(),diff:'medio',phase:g.phase,ferro:g.ferro,value:g.value,lock:g.lock,pending:g.pending,mao11:g.mao11};
+}
+function computeHint(g,v){
+  if(ME<0||!DEALT(g)||g.phase==='over')return null;
+  if(g.ferro)return{text:'Mão de ferro: tudo às cegas, não há dica de carta.'};
+  if(!v||!v.own)return null;
+  const hg=hintGame(g,v), my=team(ME), pt=(ME+2)%4, fixed=v.partner?[pt]:[], pc=x=>Math.round(x*100)+'%';
+  if(g.phase==='respond'&&my!==g.pending.team){
+    const P=winProb(hg,ME,80,fixed), nv=g.pending.value, v0=g.value, up=nextValue(nv);
+    const extra=v.partner?'':' Veja as cartas do parceiro antes de decidir.';
+    if(nv<12&&P>=needFor(hg,my,up))return{text:`Aumente pra ${VALUE_LABEL[up].replace('!','').toLowerCase()}: chance de ganhar a mão de ~${pc(P)}.`};
+    if(g.scores[g.pending.team]+v0>=12)return{text:'Aceite: correr agora entrega o jogo.'};
+    let thr=(1-v0/nv)/2+.04; if(g.scores[g.pending.team]+nv>=12)thr+=.12;
+    return P>=thr?{text:`Aceite: ~${pc(P)} de chance; vale arriscar ${nv} pra não entregar ${v0}.${P<.6?extra:''}`}
+                 :{text:`Corra: só ~${pc(P)} de chance de ganhar a mão.${extra}`};
+  }
+  if(g.phase==='mao11'&&g.mao11===my){
+    const P=winProb(hg,ME,80,fixed), extra=v.partner?'':' Veja as cartas do parceiro pra decidir melhor.';
+    return P>=.38?{text:`Mão de 11: jogue, ~${pc(P)} de chance de ganhar.${extra}`}:{text:`Mão de 11: corra, só ~${pc(P)} de chance (entrega só 1 ponto).${extra}`};
+  }
+  if(g.phase!=='play'||g.turn!==ME)return null;
+  const own=v.own, pw=own.map(c=>power(c,g.manilha)), low=pw.indexOf(Math.min(...pw)), tb=tableBest(hg), hide=canHide(g)?' ou esconda':'';
+  let idx,text;
+  if(!tb){idx=mcCard(hg,ME,60);text=`Você abre a rodada: sugestão ${cardName(own[idx],g.manilha)}.`;}
+  else if(tb.team===my){idx=low;text=`Seu parceiro está ganhando: jogue a menor${hide}.`;}
+  else{const beat=own.map((c,i)=>i).filter(i=>pw[i]>tb.p).sort((a,b)=>pw[a]-pw[b]);
+    if(beat.length){idx=beat[0];text=`${cardName(own[idx],g.manilha).replace(/^./,m=>m.toUpperCase())} ganha a rodada.`;}
+    else{idx=low;text=`Nenhuma carta sua ganha: jogue a menor${hide}.`;}}
+  if(canTruco(g,ME)){
+    const P=winProb(hg,ME,60,fixed);
+    const fortes=own.filter(c=>c.r===g.manilha||c.r==='3'||c.r==='2').sort((a,b)=>power(b,g.manilha)-power(a,g.manilha)).map(c=>c.r===g.manilha?MAN_NOME[c.s].replace('manilha de ',''):c.r);
+    if(P>=.8)text=`Mão forte (${fortes.length?fortes.join(' + '):'rodada a favor'}): bom momento pra pedir truco. `+text;
+    else if(P<.35)text='Mão fraca: evite pedir truco. '+text;
+  }
+  return{text,idx};
+}
+function hintNow(g,v){
+  if(!DICAS||!g)return{text:'',idx:null};
+  if(g.vira&&DEALT(g)&&!g.ferro&&viraHintHand!==GID+'|'+g.handNo){
+    viraHintHand=GID+'|'+g.handNo;
+    tempHint(`Manilha é ${RANK_NOME[g.manilha]}: ${RANK_PLURAL[g.manilha]} são as cartas mais fortes; paus > copas > espadas > ouros.`,3000);
+  }
+  const k=[GID,g.handNo,g.phase,g.turn,g.table.length,g.results.length,g.pending?g.pending.value:'',v&&v.partner?1:0,v&&v.own?v.own.length:0,ME].join('|');
+  if(k!==hintCache.key){let h=null;try{h=computeHint(g,v);}catch(e){h=null;}hintCache=Object.assign({key:k},h||{text:'',idx:null});}
+  return hintCache;
+}
+function renderDica(){
+  const el=$('dica'); if(!el)return;
+  el.hidden=!DICAS||!G||ME<0; if(el.hidden)return;
+  const urgente=G&&ME>=0&&((G.phase==='respond'&&team(ME)!==G.pending.team)||(G.phase==='mao11'&&G.mao11===team(ME)));
+  const t=!urgente&&tempH&&Date.now()<tempH.until?tempH.text:(hintCache.text||''); // decisão de truco e mão de 11 têm prioridade
+  el.textContent=t; el.classList.toggle('vazia',!t);
+}
 let PRIV=null, appliedN=0, consultOpen=false, consultKey='', pickIdx=null, pickKey='', sigOpen=false, mySigAt=0;
 const DEALT=g=>g.phase!=='deal'&&g.phase!=='dealPeek'&&g.phase!=='idle';
 // o que você pode ver de privado: no solo e no anfitrião vem do motor; de longe, do pacote cifrado do anfitrião
@@ -844,6 +923,9 @@ function renderSnd(){
   $('vozBtn').innerHTML=`<svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/>${Voz.on?'<path d="M8 9.5h8M8 12.5h5"/>':'<path d="M3 3l18 18"/>'}</svg>`;
   $('vozBtn').setAttribute('aria-label',Voz.on?'Vozes ligadas':'Vozes desligadas');
   $('vozBtn').setAttribute('aria-pressed',Voz.on?'true':'false');
+  $('dicaBtn').innerHTML='<svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>';
+  $('dicaBtn').setAttribute('aria-pressed',DICAS?'true':'false');
+  $('dicaBtn').setAttribute('aria-label',DICAS?'Dicas ligadas':'Dicas desligadas');
 }
 function statusText(g){
   if(ME<0)return 'Assistindo';
@@ -874,12 +956,13 @@ function render(){
   $('pile').innerHTML=g.table.map((t,i)=>`<div class="slot p${rel(t.seat)}${i>=shown?' enter':''}${lt&&lt.team!=='tie'&&lt.seat===t.seat?' win':''}">${t.hid?'<div class="card back" aria-label="Carta encoberta"></div>':cardHTML(t.card)}</div>`).join('');
   shown=g.table.length;
   const v=myView(), mine=ME>=0&&!awaiting, myTurn=mine&&g.phase==='play'&&g.turn===ME;
+  trackSeen(g); const hint=hintNow(g,v);
   const hand=$('hand'); hand.classList.toggle('active',myTurn);
   if(v&&v.own){
     const h=v.own, order=h.map((c,i)=>i).sort((a,b)=>power(h[a],g.manilha)-power(h[b],g.manilha));
     const pk=`${g.handNo}|${g.results.length}|${g.turn}|${g.phase}`; if(pk!==pickKey){pickKey=pk;pickIdx=null;}
     if(!myTurn||!canHide(g))pickIdx=null;
-    hand.innerHTML=order.map(i=>cardHTML(h[i],{man:true,tag:'button',attr:`data-i="${i}"${myTurn?'':' disabled'}${pickIdx===i?' data-sel="1"':''}`})).join('');
+    hand.innerHTML=order.map(i=>cardHTML(h[i],{man:true,tag:'button',attr:`data-i="${i}"${myTurn?'':' disabled'}${pickIdx===i?' data-sel="1"':''}${myTurn&&hint.idx===i?' data-hint="1"':''}`})).join('');
   }else if(v&&g.ferro&&DEALT(g)&&ME>=0){ // mão de ferro: cartas viradas, você escolhe às cegas
     hand.innerHTML=Array.from({length:v.count},(_,i)=>`<button class="card back blind" data-i="${i}"${myTurn?'':' disabled'} aria-label="Carta ${i+1}, virada"><span class="blind-n">Carta ${i+1}</span></button>`).join('');
   }else hand.innerHTML='';
@@ -917,6 +1000,7 @@ function render(){
     sh.hidden=false;
   }else{sh.hidden=true;sh.innerHTML='';} // nada de privado fica escondido na página
   $('spect').hidden=!(MODE==='online'&&ME<0);
+  renderDica();
 }
 const bubTimers={};
 function say(seat,text,big){
@@ -928,9 +1012,12 @@ let toastTimer;
 function toast(text,ms){const el=$('toast');el.textContent=text;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),ms||1500);}
 function showSig(seat,k){
   const x=SINAIS.find(z=>z.k===k), el=$('sig'+rel(seat)); if(!x||!el)return;
-  el.innerHTML=`<span class="se">${x.e}</span><span class="sn">${esc(x.n)}</span>`; el.setAttribute('aria-label',`${seatName(seat)}: sinal ${x.n}`);
+  const mine=seat===ME, parceiro=DICAS&&ME>=0&&seat===(ME+2)%4;
+  el.innerHTML=`<span class="se">${x.e}</span>`+(mine?`<span class="sn">Você: ${esc(x.n)}</span>`:parceiro?`<span class="sn">${esc(x.n)}</span>`:'');
+  el.setAttribute('aria-label',mine?`Você fez o sinal ${x.n}`:parceiro?`${seatName(seat)} sinalizou: ${x.n}`:`${seatName(seat)} fez um sinal: ${x.e}`);
   el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
-  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),1500);
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),mine?1100:1300);
+  if(parceiro)tempHint(`${seatName(seat)} sinalizou: ${x.n} (${x.t.split(': ')[1]||x.n}).`,3000);
 }
 function playEvent(ev){
   if(ev.type==='toast'){toast(ev.text,1600);return;}
@@ -1274,7 +1361,8 @@ const RULES=`<details class="rules"><summary>Regras rápidas</summary><ul>
 <li>No <b>primeiro truco</b> da mão, a dupla desafiada pode ver as cartas do parceiro antes de responder. No seis, nove e doze, não.</li>
 <li><b>Mão de 11</b>: a dupla com 11 pode ver as cartas do parceiro e decide se joga, valendo 3. Sem truco.</li>
 <li><b>Esconder</b>: da 2ª rodada em diante, toque na carta e escolha Esconder (ou segure a carta). Ela vai virada, não vale nada e ninguém fica sabendo qual era.</li>
-<li><b>Sinais</b> (👀): todo mundo vê, então combine bem com o parceiro. ${SINAIS.map(x=>x.e+' <b>'+x.n+'</b> ('+x.t+')').join(' · ')}.</li>
+<li><b>Dicas</b> (💡): liga dicas só na sua tela, com o que você já pode ver.</li>
+<li><b>Sinais</b> (👀): todo mundo vê o emoji, então combine bem com o parceiro. ${SINAIS.map(x=>x.e+' <b>'+x.n+'</b> ('+x.t+')').join(' · ')}.</li>
 <li><b>Mão de ferro</b> (11 a 11): cartas viradas para todos, até para você. Escolha às cegas; quem ganhar a mão leva o jogo.</li>
 <li>Quem fizer <b>12 pontos</b> primeiro ganha.</li></ul></details>`;
 const segHTML=()=>`<div class="seg" role="radiogroup" aria-label="Dificuldade">${[['facil','Fácil'],['medio','Médio'],['dificil','Difícil']].map(([k,l])=>`<button role="radio" aria-checked="${k===diff}" data-d="${k}">${l}</button>`).join('')}</div>`;
@@ -1382,6 +1470,7 @@ $('sheet').addEventListener('click',e=>{
 });
 $('menuBtn').addEventListener('click',()=>{if(MODE==='online')showLobby();else showMenu({ongoing:true});});
 $('sndBtn').addEventListener('click',()=>{Snd.on=!Snd.on;store.set('truco.sound',Snd.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(Snd.on)Snd.accept();else Voz.stopAll();});
+$('dicaBtn').addEventListener('click',()=>{DICAS=!DICAS;store.set('truco.dicas',DICAS?'1':'0');hintCache={key:''};tempH=null;renderSnd();if(G)render();});
 $('vozBtn').addEventListener('click',()=>{Voz.on=!Voz.on;store.set('truco.voices',Voz.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(!Voz.on)Voz.stopAll();});
 
 /* sala simulada entre abas (só para testes locais com ?fakeroom) */
@@ -1411,7 +1500,7 @@ function FakeRoom(){
       leave:async()=>{alive=false;clearInterval(hb);bc.postMessage({peer:me,bye:1});bc.close();hs.clear();}};
   }};
 }
-if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,Cry,get PRIV(){return PRIV;},get RM(){return RM;},privateView,myView,get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
+if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,Cry,get PRIV(){return PRIV;},get RM(){return RM;},privateView,myView,hintGame,computeHint,get hintCache(){return hintCache;},forceTruco(seat){actTruco(G,seat);step();},get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
 
 initSeats(); renderSnd();
 if(window.claude&&window.claude.use)getRoomNS(); // no claude.ai já pede a sala; fora dele o Firebase só conecta quando você for jogar online
