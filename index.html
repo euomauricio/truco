@@ -120,6 +120,9 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .btn.big{width:100%;padding:15px;font-size:17px}
 .btn.truco{background:var(--hot);color:#fff;font-family:var(--f-display);font-weight:400;font-size:22px;letter-spacing:.05em;padding:12px 30px;box-shadow:0 4px 0 var(--hot-deep);animation:pulse 1.6s ease-in-out infinite}
 @keyframes pulse{50%{transform:scale(1.05)}}
+.btn.deal{background:var(--gold);color:var(--btn-ink);font-family:var(--f-display);font-weight:400;font-size:19px;letter-spacing:.04em;padding:12px 24px;box-shadow:0 4px 0 var(--gold-deep);animation:pulse 1.6s ease-in-out infinite}
+.hand .card.blind{display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px;border-width:3px}
+.blind-n{background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:900;padding:3px 8px;border-radius:8px}
 
 /* falas e avisos */
 .bubble{position:absolute;z-index:5;background:var(--bubble);color:var(--bubble-ink);font-weight:900;padding:6px 11px;border-radius:12px;white-space:nowrap;font-size:14px;opacity:0;transform:scale(.6);transition:opacity .18s,transform .18s;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.3)}
@@ -264,21 +267,61 @@ function power(c,man){return c.r===man?10+c.s:RANKS.indexOf(c.r);}
 function nextValue(v){return v===1?3:v+3;}
 const VIRA_NOME={'4':'4','5':'5','6':'6','7':'7','10':'Q','11':'J','12':'K','1':'A','2':'2','3':'3'}; // nome do momento de voz por manilha
 
-function newGame(diff){return{scores:[0,0],dealer:Math.floor(Math.random()*4),diff,phase:'idle',events:[],handNo:0,hands:[[],[],[],[]],table:[],played:[],results:[],value:1,mao11:null,ferro:false};}
+function newGame(diff){return{scores:[0,0],dealer:Math.floor(Math.random()*4),diff,phase:'idle',events:[],handNo:0,hands:[[],[],[],[]],table:[],played:[],results:[],value:1,mao11:null,ferro:false,consult:null,peek:null,vira:null,manilha:null};}
 
+/* Mão em três tempos:
+   'deal'     -> o carteador da vez aciona "Dar as cartas" (bot distribui sozinho);
+   'dealPeek' -> só o carteador vê a 1ª carta que o parceiro recebeu e confirma (não existe na mão de ferro);
+   início     -> vira na mesa, mão de 11 / mão de ferro, primeira jogada.
+   A ordem das cartas e o sorteio são os de sempre. Ponto de extensão para o futuro corte:
+   dealPrivileges() lista quem vê o quê durante a distribuição. */
 function startHand(g){
   g.dealer=(g.dealer+1)%4; g.handNo++;
+  Object.assign(g,{hands:[[],[],[],[]],vira:null,manilha:null,value:1,lock:null,pending:null,results:[],table:[],played:[],
+    lastTrick:null,mao11:null,ferro:false,handResult:null,consult:null,peek:null});
+  const at11=[0,1].filter(t=>g.scores[t]===11);
+  if(at11.length===2)g.ferro=true;
+  else if(at11.length===1){g.mao11=at11[0];g.value=3;}
+  g.phase='deal';
+}
+function dealPrivileges(g){ // quem vê alguma carta durante a distribuição (hoje: só a espiada do carteador)
+  return g.ferro?[]:[{seat:g.dealer,kind:'parceiro1',card:g.hands[(g.dealer+2)%4][0]}];
+}
+function actDeal(g,seat){
+  if(g.phase!=='deal'||seat!==g.dealer)throw new Error('só o carteador dá as cartas');
   const d=shuffle(makeDeck());
-  g.hands=[[],[],[],[]];
   for(let i=0;i<3;i++)for(let k=1;k<=4;k++)g.hands[(g.dealer+k)%4].push(d.pop());
   g.vira=d.pop(); g.manilha=manilhaOf(g.vira.r);
-  Object.assign(g,{value:1,lock:null,pending:null,results:[],table:[],played:[],lastTrick:null,mao11:null,ferro:false,handResult:null});
+  const pv=dealPrivileges(g);
+  if(pv.length){g.peek=pv[0];g.phase='dealPeek';}else beginHand(g);
+}
+function actDealOk(g,seat){
+  if(g.phase!=='dealPeek'||seat!==g.dealer)throw new Error('só o carteador confirma');
+  g.peek=null; beginHand(g);
+}
+function beginHand(g){
   g.leader=(g.dealer+1)%4; g.turn=g.leader;
   g.events.push({type:'voice',key:'vira_'+VIRA_NOME[g.manilha]}); // anuncia a manilha
-  const at11=[0,1].filter(t=>g.scores[t]===11);
-  if(at11.length===2){g.ferro=true;g.phase='play';g.events.push({type:'toast',text:'Mão de ferro! Sem truco, vale 1.'});}
-  else if(at11.length===1){g.mao11=at11[0];g.value=3;g.phase='mao11';g.events.push({type:'voice',key:'mao11'});}
+  if(g.ferro){g.phase='play';g.events.push({type:'toast',text:'Mão de ferro! Cartas viradas, sem truco.'});}
+  else if(g.mao11!==null){g.phase='mao11';g.events.push({type:'voice',key:'mao11'});}
   else g.phase='play';
+}
+// pode ver as cartas que o parceiro ainda tem? (decidido pelo estado da mão, nunca pelo botão)
+function canConsult(g,seat){
+  if(seat<0||g.ferro)return false;
+  if(g.phase==='respond'&&g.consult&&g.consult.team===team(seat))return true;   // 1º truco da mão: dupla desafiada
+  if(g.phase==='mao11'&&g.mao11===team(seat))return true;                         // mão de 11: dupla com 11
+  return false;
+}
+// o que um assento pode ver de privado agora
+function privateView(g,seat){
+  const v={own:null,count:seat>=0?g.hands[seat].length:0,partner:null,peek:null};
+  if(seat<0)return v;
+  const dealt=g.phase!=='deal'&&g.phase!=='dealPeek'&&g.phase!=='idle';
+  if(dealt&&!g.ferro)v.own=g.hands[seat].slice();
+  if(g.phase==='dealPeek'&&g.peek&&g.peek.seat===seat)v.peek=g.peek.card;
+  if(canConsult(g,seat))v.partner=g.hands[(seat+2)%4].slice();
+  return v;
 }
 function canTruco(g,seat){return g.phase==='play'&&g.turn===seat&&g.mao11===null&&!g.ferro&&g.value<12&&g.lock!==team(seat);}
 function actTruco(g,seat){
@@ -286,12 +329,14 @@ function actTruco(g,seat){
   const v=nextValue(g.value);
   g.pending={team:team(seat),value:v,seat};
   g.phase='respond';
+  g.consult=v===3?{team:1-team(seat)}:null; // só no pedido inicial de truco
   g.events.push({type:'say',seat,text:VALUE_LABEL[v],kind:'call'});
 }
 function actRespond(g,choice,seat){
   if(g.phase!=='respond')throw new Error('não há pedido');
   const p=g.pending, rt=1-p.team;
   if(team(seat)!==rt)throw new Error('quem responde é a outra dupla');
+  g.consult=null; // a resposta (aceitar, correr ou aumentar) encerra a consulta
   if(choice==='accept'){
     g.value=p.value; g.lock=p.team; g.pending=null; g.phase='play';
     g.events.push({type:'say',seat,text:pick(['Desce!','Aceito!','Manda!','Bora!']),kind:'accept'});
@@ -343,7 +388,7 @@ function endHand(g,winner,pts,reason){
   if(winner!=='none')g.scores[winner]=Math.min(12,g.scores[winner]+pts);
   if(reason==='tricks'&&winner!=='none'&&pts>=3)g.events.push({type:'voice',key:'ganhou_mao'});
   g.handResult={winner,pts:winner==='none'?0:pts,reason};
-  g.pending=null; g.phase='handDone';
+  g.pending=null; g.consult=null; g.phase='handDone';
 }
 function actMao11(g,play){
   if(g.phase!=='mao11')throw new Error('não é mão de 11');
@@ -363,6 +408,8 @@ function advance(g){
 }
 function whoActs(g){
   switch(g.phase){
+    case 'deal':return{kind:'deal',seat:g.dealer};
+    case 'dealPeek':return{kind:'dealPeek',seat:g.dealer};
     case 'play':return{kind:'play',seat:g.turn};
     case 'respond':return{kind:'respond',team:1-g.pending.team};
     case 'mao11':return{kind:'mao11',team:g.mao11};
@@ -486,7 +533,8 @@ function botRespond(g,t){
     return{choice:'run',seat};
   }
   let P=-1,seat=t;
-  for(const s of [t,t+2]){const x=winProb(g,s,cfg.mc);if(x>P){P=x;seat=s;}}
+  if(g.consult&&g.consult.team===t){P=winProb(g,t,cfg.mc,[t+2]);} // consultaram as cartas um do outro
+  else for(const s of [t,t+2]){const x=winProb(g,s,cfg.mc);if(x>P){P=x;seat=s;}}
   P=P-cfg.respDisc+(Math.random()-.5)*cfg.noise*2;   // quem pede costuma ter jogo
   if(nv<12&&P>=cfg.raiseP)return{choice:'raise',seat};
   if(g.scores[opp]+v>=12)return{choice:'accept',seat}; // correr perderia o jogo de qualquer jeito
@@ -502,10 +550,12 @@ function botMao11(g,t){
 }
 function botCard(g,seat){
   const cfg=cfgOf(g), h=g.hands[seat];
+  if(g.ferro)return Math.floor(Math.random()*h.length); // mão de ferro: ninguém vê as cartas, nem o bot
   if(Math.random()<cfg.blunder)return Math.floor(Math.random()*h.length);
   return cfg.mc?mcCard(g,seat,cfg.mc):cardHeur(g,seat);
 }
 function botTurn(g,seat){if(botWantsTruco(g,seat))actTruco(g,seat);else actPlay(g,seat,botCard(g,seat));}
+function botDeal(g){if(g.phase==='deal')actDeal(g,g.dealer);if(g.phase==='dealPeek')actDealOk(g,g.dealer);}
 /*ENGINE-END*/
 
 /* ---------- desenho das cartas ---------- */
@@ -698,6 +748,14 @@ let MODE='solo', ME=0, IS_HOST=true, SEATS=[null,null,null,null], LOBBY=false, C
 let unsubPeers=null, lastAct={}, evLog=[], evSeq=0, lastEv=0, lastGid='', lastSt=null, actN=0, awaiting=false;
 let hostSeenAt=0, hostWatch=null, joinedAt=0, autoSeat=true, myWant=null, modalKind='', nick=store.get('truco.nick')||'';
 const VIEW=()=>ME>=0?ME:0;
+let PRIV=null, appliedN=0, consultOpen=false, consultKey='';
+const DEALT=g=>g.phase!=='deal'&&g.phase!=='dealPeek'&&g.phase!=='idle';
+// o que você pode ver de privado: no solo e no anfitrião vem do motor; de longe, do pacote cifrado do anfitrião
+function myView(){
+  if(!G)return null;
+  if(authority())return privateView(G,ME);
+  return PRIV||{own:null,count:ME>=0?G.hands[ME].length:0,partner:null,peek:null};
+}
 const isHumanSeat=s=>MODE==='solo'?s===0:!!SEATS[s];
 const isBot=s=>!isHumanSeat(s);
 const rel=s=>(s-VIEW()+4)%4;
@@ -722,6 +780,8 @@ function renderSnd(){
 }
 function statusText(g){
   if(ME<0)return 'Assistindo';
+  if(g.phase==='deal')return g.dealer===ME?'Você é o carteador':`${esc(seatName(g.dealer))} vai dar as cartas…`;
+  if(g.phase==='dealPeek')return g.dealer===ME?'Confira e continue':`${esc(seatName(g.dealer))} está dando as cartas…`;
   if(g.phase==='play')return g.turn===ME?'Sua vez: toque numa carta':`Vez de ${esc(seatName(g.turn))}…`;
   if(g.phase==='respond')return team(ME)===g.pending.team?'Esperando a resposta…':'Responda o pedido';
   if(g.phase==='mao11')return g.mao11===team(ME)?'Decida a mão de 11':'Eles decidem a mão de 11…';
@@ -733,7 +793,7 @@ function render(){
   $('sUs').textContent=g.scores[mt]; $('sThem').textContent=g.scores[1-mt];
   $('handVal').textContent=g.ferro?'Mão de ferro · 1':g.mao11!==null?'Mão de 11 · vale 3':`Mão vale ${g.value}`;
   $('dots').innerHTML=[0,1,2].map(i=>{const r=g.results[i];return `<span class="dot ${r===undefined?'':r==='tie'?'tie':r===mt?'us':'them'}"></span>`;}).join('');
-  $('vira').innerHTML=g.vira?`${cardHTML(g.vira)}<div class="vira-lbl">Vira<br><b>Manilha ${g.manilha}</b></div>`:'';
+  $('vira').innerHTML=g.vira&&DEALT(g)?`${cardHTML(g.vira)}<div class="vira-lbl">Vira<br><b>Manilha ${g.manilha}</b></div>`:'';
   for(const p of [1,2,3]){
     const s=(V+p)%4, nm=seatName(s);
     $('seat'+p).classList.toggle('turn',g.phase==='play'&&g.turn===s);
@@ -746,26 +806,40 @@ function render(){
   const lt=g.phase==='trickDone'?g.lastTrick:null;
   $('pile').innerHTML=g.table.map((t,i)=>`<div class="slot p${rel(t.seat)}${i>=shown?' enter':''}${lt&&lt.team!=='tie'&&lt.seat===t.seat?' win':''}">${cardHTML(t.card)}</div>`).join('');
   shown=g.table.length;
-  const mine=ME>=0&&!awaiting, myTurn=mine&&g.phase==='play'&&g.turn===ME, h=ME>=0?g.hands[ME]:[];
-  const order=h.map((c,i)=>i).sort((a,b)=>power(h[a],g.manilha)-power(h[b],g.manilha));
+  const v=myView(), mine=ME>=0&&!awaiting, myTurn=mine&&g.phase==='play'&&g.turn===ME;
   const hand=$('hand'); hand.classList.toggle('active',myTurn);
-  hand.innerHTML=order.map(i=>cardHTML(h[i],{man:true,tag:'button',attr:`data-i="${i}"${myTurn?'':' disabled'}`})).join('');
-  $('actions').innerHTML=(mine&&canTruco(g,ME)?`<button class="btn truco" id="btnTruco">${VALUE_LABEL[nextValue(g.value)].replace('!','')}</button>`:'')+`<span class="status">${statusText(g)}</span>`;
+  if(v&&v.own){
+    const h=v.own, order=h.map((c,i)=>i).sort((a,b)=>power(h[a],g.manilha)-power(h[b],g.manilha));
+    hand.innerHTML=order.map(i=>cardHTML(h[i],{man:true,tag:'button',attr:`data-i="${i}"${myTurn?'':' disabled'}`})).join('');
+  }else if(v&&g.ferro&&DEALT(g)&&ME>=0){ // mão de ferro: cartas viradas, você escolhe às cegas
+    hand.innerHTML=Array.from({length:v.count},(_,i)=>`<button class="card back blind" data-i="${i}"${myTurn?'':' disabled'} aria-label="Carta ${i+1}, virada"><span class="blind-n">Carta ${i+1}</span></button>`).join('');
+  }else hand.innerHTML='';
+  const dealBtn=mine&&g.phase==='deal'&&g.dealer===ME?'<button class="btn deal" id="btnDeal">Dar as cartas</button>':'';
+  $('actions').innerHTML=dealBtn+(mine&&canTruco(g,ME)?`<button class="btn truco" id="btnTruco">${VALUE_LABEL[nextValue(g.value)].replace('!','')}</button>`:'')+`<span class="status">${statusText(g)}</span>`;
+  // consulta às cartas do parceiro: só abre por toque, e some quando o estado muda
+  const ck=`${g.handNo}|${g.phase}|${g.pending?g.pending.value:''}`; if(ck!==consultKey){consultKey=ck;consultOpen=false;}
+  const pt=(ME+2)%4;
+  const consultHTML=v&&v.partner?`<button class="btn ghost" data-c="1">${consultOpen?'Fechar cartas do parceiro':'Ver cartas do parceiro'}</button>
+      ${consultOpen?`<div class="sh-sub">Cartas de ${esc(seatName(pt))} (só você está vendo):</div><div class="peek">${v.partner.length?v.partner.map(c=>cardHTML(c,{man:true})).join(''):'<span class="sh-sub">Sem cartas na mão.</span>'}</div>`:''}`:'';
   const sh=$('sheet');
-  if(mine&&g.phase==='respond'&&team(ME)!==g.pending.team){
+  if(mine&&g.phase==='dealPeek'&&v&&v.peek){
+    sh.innerHTML=`<div class="sh-title">Primeira carta do seu parceiro</div>
+      <div class="sh-sub">Só você está vendo. Ela continua na mão de ${esc(seatName(pt))}.</div>
+      <div class="peek">${cardHTML(v.peek)}</div>
+      <div class="btns"><button class="btn primary" data-k="dealok">Continuar</button></div>`;
+    sh.hidden=false;
+  }else if(mine&&g.phase==='respond'&&team(ME)!==g.pending.team){
     const p=g.pending;
     sh.innerHTML=`<div class="sh-title"><b>${esc(seatName(p.seat))}</b> pediu <span class="callx">${VALUE_LABEL[p.value]}</span></div>
-      <div class="sh-sub">Aceitando, a mão vale ${p.value}. Correndo, eles levam ${g.value}.</div>
+      <div class="sh-sub">Aceitando, a mão vale ${p.value}. Correndo, eles levam ${g.value}.</div>${consultHTML}
       <div class="btns"><button class="btn primary" data-r="accept">Aceito</button>${p.value<12?`<button class="btn hot" data-r="raise">${VALUE_LABEL[nextValue(p.value)]}</button>`:''}<button class="btn ghost" data-r="run">Corro</button></div>`;
     sh.hidden=false;
   }else if(mine&&g.phase==='mao11'&&g.mao11===team(ME)){
-    const pt=(ME+2)%4;
-    sh.innerHTML=`<div class="sh-title"><span class="callx">MÃO DE 11!</span></div>
-      <div class="sh-sub">Cartas de ${esc(seatName(pt))}:</div><div class="peek">${g.hands[pt].map(c=>cardHTML(c,{man:true})).join('')}</div>
+    sh.innerHTML=`<div class="sh-title"><span class="callx">MÃO DE 11!</span></div>${consultHTML}
       <div class="sh-sub">Jogando, a mão vale 3. Correndo, eles levam 1.</div>
       <div class="btns"><button class="btn primary" data-m="1">Jogar</button><button class="btn ghost" data-m="0">Correr</button></div>`;
     sh.hidden=false;
-  }else sh.hidden=true;
+  }else{sh.hidden=true;sh.innerHTML='';} // nada de privado fica escondido na página
   $('spect').hidden=!(MODE==='online'&&ME<0);
 }
 const bubTimers={};
@@ -802,7 +876,8 @@ function handText(g){
 function phaseFx(g){ // sons e avisos, uma vez por mudança de estado
   const key=`${GID}|${g.handNo}|${g.results.length}|${g.phase}|${g.turn}`;
   if(key===soundKey)return; soundKey=key;
-  if(g.handNo!==lastHand&&g.phase!=='idle'){lastHand=g.handNo;Snd.deal();}
+  if(g.handNo!==lastHand&&g.phase!=='idle'&&g.phase!=='deal'){lastHand=g.handNo;Snd.deal();}
+  if(g.phase==='deal'&&g.dealer===ME)Snd.myTurn();
   if(g.phase==='trickDone'){if(g.lastTrick.team==='tie'){Snd.tie();toast('Empate! (cangou)',1000);}else Snd.trick(g.lastTrick.team===myTeam());}
   else if(g.phase==='handDone'){toast(handText(g),2100);const hw=g.handResult.winner;if(hw!=='none'&&g.handResult.reason==='tricks')setTimeout(()=>Snd.hand(hw===myTeam()),350);}
   else if(g.phase==='over')Snd.game(g.winner===myTeam());
@@ -819,6 +894,7 @@ function step(){
   if(w.kind==='advance'){
     timer=setTimeout(()=>{advance(g);step();},D(g.phase==='trickDone'?1150:g.phase==='handDone'?2300:200));
   }else if(w.kind==='over'){showOver();}
+  else if(w.kind==='deal'||w.kind==='dealPeek'){if(isBot(w.seat))timer=setTimeout(()=>{botDeal(g);step();},D(w.kind==='deal'?700:300));}
   else if(w.kind==='play'){if(isBot(w.seat)){
     const first=g.played.length===0, t0=Date.now();
     const go=()=>{if(first&&Voz.announcing()&&Date.now()-t0<3500){timer=setTimeout(go,150);return;}botTurn(g,w.seat);step();};
@@ -843,6 +919,8 @@ function applyAction(seat,a){
     else if(a.k==='truco'&&canTruco(g,seat))actTruco(g,seat);
     else if(a.k==='resp'&&g.phase==='respond'&&team(seat)!==g.pending.team&&['accept','run','raise'].includes(a.r)&&!(a.r==='raise'&&g.pending.value>=12))actRespond(g,a.r,seat);
     else if(a.k==='m11'&&g.phase==='mao11'&&team(seat)===g.mao11)actMao11(g,!!a.p);
+    else if(a.k==='deal'&&g.phase==='deal'&&seat===g.dealer)actDeal(g,seat);
+    else if(a.k==='dealok'&&g.phase==='dealPeek'&&seat===g.dealer)actDealOk(g,seat);
     else return false;
   }catch(e){return false;}
   step(); return true;
@@ -861,27 +939,80 @@ function startGame(){
 
 /* ---------- mesa online ---------- */
 const ci=c=>RANKS.indexOf(c.r)*4+c.s, cd=i=>({r:RANKS[i>>2],s:i&3});
+/* Privacidade online: o estado público (para todos) só leva a QUANTIDADE de cartas de cada um.
+   O que cada assento pode ver (sua mão, a espiada do carteador, as cartas do parceiro na consulta)
+   vai cifrado só para aquele jogador: chave ECDH P-256 por aba + AES-GCM, tudo do próprio navegador.
+   Quem lê o banco ou a sala vê só texto cifrado. O anfitrião roda o jogo e, por isso, tem tudo na memória. */
+const b64=buf=>{let t='';const u=new Uint8Array(buf);for(let i=0;i<u.length;i++)t+=String.fromCharCode(u[i]);return btoa(t);};
+const unb64=t=>{const x=atob(t),u=new Uint8Array(x.length);for(let i=0;i<x.length;i++)u[i]=x.charCodeAt(i);return u;};
+const Cry={kp:null,pub:null,keys:new Map(),
+  async init(){
+    if(this.pub)return true;
+    if(!(window.crypto&&crypto.subtle))return false;
+    try{this.kp=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},false,['deriveKey']);
+      this.pub=b64(await crypto.subtle.exportKey('raw',this.kp.publicKey));return true;}catch(e){return false;}
+  },
+  key(peer){
+    if(!this.keys.has(peer))this.keys.set(peer,(async()=>{
+      const pk=await crypto.subtle.importKey('raw',unb64(peer),{name:'ECDH',namedCurve:'P-256'},false,[]);
+      return crypto.subtle.deriveKey({name:'ECDH',public:pk},this.kp.privateKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+    })());
+    return this.keys.get(peer);
+  },
+  async enc(peer,obj){const k=await this.key(peer),iv=crypto.getRandomValues(new Uint8Array(12));
+    return b64(iv)+'.'+b64(await crypto.subtle.encrypt({name:'AES-GCM',iv},k,new TextEncoder().encode(JSON.stringify(obj))));},
+  async dec(peer,t){const [a,b]=String(t).split('.');const k=await this.key(peer);
+    return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(a)},k,unb64(b))));}
+};
+const PEER_PK={};
 function encode(){
-  const base={v:1,code:CODE,gid:GID,diff,seats:SEATS.map(x=>x&&{p:x.p,n:x.n}),on:LOBBY||!G?0:1};
+  const base={v:2,code:CODE,gid:GID,diff,seats:SEATS.map(x=>x&&{p:x.p,n:x.n}),on:LOBBY||!G?0:1};
   if(!base.on)return base;
   const g=G;
-  return Object.assign(base,{ph:g.phase,sc:g.scores,hn:g.handNo,h:g.hands.map(h=>h.map(ci)),t:g.table.map(x=>[x.seat,ci(x.card)]),
-    vr:g.vira?ci(g.vira):-1,val:g.value,lk:g.lock,pd:g.pending,rs:g.results,tu:g.turn,m11:g.mao11,fe:g.ferro?1:0,
+  return Object.assign(base,{ph:g.phase,sc:g.scores,hn:g.handNo,dl:g.dealer,hc:g.hands.map(h=>h.length),t:g.table.map(x=>[x.seat,ci(x.card)]),
+    vr:g.vira&&DEALT(g)?ci(g.vira):-1,val:g.value,lk:g.lock,pd:g.pending,cs:g.consult?g.consult.team:null,rs:g.results,tu:g.turn,m11:g.mao11,fe:g.ferro?1:0,
     lt:g.lastTrick,hr:g.handResult,w:g.winner==null?null:g.winner,ev:evLog});
 }
+function privPayload(seat){const v=privateView(G,seat);return{o:v.own?v.own.map(ci):null,c:v.count,p:v.partner?v.partner.map(ci):null,k:v.peek?ci(v.peek):null};}
+const okc=i=>Number.isInteger(i)&&i>=0&&i<40;
 function decode(st){
-  const okc=i=>Number.isInteger(i)&&i>=0&&i<40;
-  if(!Array.isArray(st.h)||st.h.length!==4||!st.h.every(h=>Array.isArray(h)&&h.every(okc)))throw new Error('estado inválido');
-  const g={phase:String(st.ph),scores:[+st.sc[0]||0,+st.sc[1]||0],handNo:+st.hn||0,hands:st.h.map(h=>h.map(cd)),
+  if(!Array.isArray(st.hc)||st.hc.length!==4)throw new Error('estado inválido');
+  const g={phase:String(st.ph),scores:[+st.sc[0]||0,+st.sc[1]||0],handNo:+st.hn||0,dealer:(+st.dl)&3,
+    hands:st.hc.map(n=>Array(Math.max(0,Math.min(3,+n||0))).fill(null)), // só a quantidade: as cartas dos outros não chegam aqui
     table:(st.t||[]).filter(x=>Array.isArray(x)&&okc(x[1])).map(([s,c])=>({seat:s&3,card:cd(c)})),
-    vira:okc(st.vr)?cd(st.vr):null,value:+st.val||1,lock:st.lk,pending:st.pd||null,results:Array.isArray(st.rs)?st.rs:[],
-    turn:(+st.tu)&3,mao11:st.m11==null?null:st.m11,ferro:!!st.fe,lastTrick:st.lt||null,handResult:st.hr||null,winner:st.w,events:[],played:[],diff};
+    vira:okc(st.vr)?cd(st.vr):null,value:+st.val||1,lock:st.lk,pending:st.pd||null,consult:st.cs==null?null:{team:st.cs&1},
+    results:Array.isArray(st.rs)?st.rs:[],turn:(+st.tu)&3,mao11:st.m11==null?null:st.m11,ferro:!!st.fe,lastTrick:st.lt||null,
+    handResult:st.hr||null,winner:st.w,events:[],played:[],diff,peek:null};
   g.manilha=g.vira?manilhaOf(g.vira.r):null;
   return g;
 }
-function publish(){
+function privFrom(b){
+  return{own:Array.isArray(b.o)?b.o.filter(okc).map(cd):null,count:Math.max(0,Math.min(3,+b.c||0)),
+    partner:Array.isArray(b.p)?b.p.filter(okc).map(cd):null,peek:okc(b.k)?cd(b.k):null};
+}
+let pubBusy=false,pubAgain=false,pubN=0;
+async function publish(){
   if(!RM||!IS_HOST)return;
-  RM.presence({host:true,st:encode()}).catch(e=>console.warn('presença',e&&e.code,e&&e.message));
+  if(pubBusy){pubAgain=true;return;}
+  pubBusy=true;
+  try{
+    do{
+      pubAgain=false;
+      const st=encode(); st.n=++pubN;
+      if(st.on){ // monta tudo agora (mesmo instante do jogo) e cifra em seguida
+        const jobs=[], pv={};
+        for(let s=0;s<4;s++){
+          const x=SEATS[s]; if(!x||s===ME)continue;
+          const pk=PEER_PK[x.p]; if(!pk)continue;
+          const body=Object.assign(privPayload(s),{n:st.n,s});
+          jobs.push(Cry.enc(pk,body).then(c=>{pv[s]=c;},()=>{}));
+        }
+        await Promise.all(jobs); st.pv=pv;
+      }
+      if(!RM)return;
+      RM.presence({host:true,st,hpk:Cry.pub}).catch(e=>console.warn('presença',e&&e.code,e&&e.message));
+    }while(pubAgain);
+  }finally{pubBusy=false;}
 }
 /* sala via Firebase Realtime Database (GitHub Pages e qualquer site fora do claude.ai).
    Mesma interface da sala do claude.ai: cada aba grava sua "presença" em rooms/CODE/peers/<id>
@@ -940,15 +1071,16 @@ async function enterTable(code,host){
   const inp=$('nickInp'); nick=cleanNick(inp?inp.value:nick)||('Jogador '+Math.floor(Math.random()*90+10)); store.set('truco.nick',nick);
   if(!/^[A-Z0-9]{4}$/.test(code)){onlineMsg('O código da mesa tem 4 letras ou números.');return;}
   onlineMsg('Conectando…');
+  if(!await Cry.init()){onlineMsg('Este navegador não tem a criptografia necessária para esconder as cartas. Atualize o navegador.');return;}
   const ns=await getRoomNS();
   if(!ns){onlineMsg('O modo online não carregou. Confira a internet e recarregue a página.');return;}
   let r; try{r=await ns.join(ns.kind==='firebase'?code:'mesa-'+code.toLowerCase());}
   catch(e){onlineMsg(e&&e.code==='not_permitted'?'O servidor recusou a mesa. Tente outro código.':'Não consegui conectar na mesa. Confira a internet e tente de novo.');return;}
   clearTimeout(timer);
   RM=r;MODE='online';IS_HOST=host;CODE=code;LOBBY=true;SEATS=[null,null,null,null];G=null;ME=-1;
-  lastAct={};evLog=[];evSeq=0;lastEv=0;lastGid='';lastSt=null;actN=0;awaiting=false;autoSeat=true;myWant=null;
+  lastAct={};evLog=[];evSeq=0;lastEv=0;lastGid='';lastSt=null;actN=0;awaiting=false;autoSeat=true;myWant=null;PRIV=null;appliedN=0;
   joinedAt=Date.now();hostSeenAt=host?Date.now():0;
-  await RM.presence({n:nick,want:host?0:null,act:null,host:host?true:null,st:null}).catch(()=>{});
+  await RM.presence({n:nick,want:host?0:null,act:null,host:host?true:null,st:null,pk:Cry.pub}).catch(()=>{});
   unsubPeers=RM.onPeers(onRoomPeers,()=>lostTable('A conexão com a mesa caiu.'));
   if(host)publish();
   clearInterval(hostWatch);hostWatch=setInterval(watchHost,1000);
@@ -975,10 +1107,11 @@ function onRoomPeers(){
   if(IS_HOST)hostReconcile(peers);else clientSync(peers);
 }
 function hostReconcile(peers){
-  const live=new Set(peers.map(p=>p.peer)); let changed=false; const acts=[];
+  const live=new Set(peers.map(p=>p.peer)); let changed=false, pkNew=false; const acts=[];
   SEATS=SEATS.map(x=>{if(x&&!live.has(x.p)){changed=true;return null;}return x;});
   for(const p of peers){
     const pr=p.presence||{}, nk=cleanNick(pr.n)||'Jogador';
+    if(typeof pr.pk==='string'&&pr.pk.length<200&&PEER_PK[p.peer]!==pr.pk){PEER_PK[p.peer]=pr.pk;pkNew=true;}
     let cur=SEATS.findIndex(x=>x&&x.p===p.peer);
     if(cur>=0&&SEATS[cur].n!==nk){SEATS[cur]={p:p.peer,n:nk};changed=true;}
     const want=pr.want;
@@ -992,6 +1125,7 @@ function hostReconcile(peers){
   }
   ME=SEATS.findIndex(x=>x&&x.p===MYPEER);
   if(changed){if(!LOBBY&&G){render();step();}else publish();}
+  else if(pkNew)publish();
   if(!LOBBY&&G)for(const [s,a] of acts)applyAction(s,a);
   refreshLobby();
 }
@@ -1007,18 +1141,25 @@ function clientSync(peers){
   if(autoSeat&&ME<0&&!st.on&&(myWant==null||SEATS[myWant])){const free=[0,2,1,3].find(i=>!SEATS[i]);if(free!==undefined)requestSeat(free);} // perdeu a cadeira na corrida? tenta outra
   if(st.on){
     let g; try{g=decode(st);}catch(e){return;}
-    const evs=Array.isArray(st.ev)?st.ev:[];
-    if(st.gid!==lastGid){lastGid=st.gid;GID=String(st.gid);lastEv=evs.reduce((m,e)=>Math.max(m,+e.id||0),0);shown=0;}
-    LOBBY=false;G=g;awaiting=false;
-    for(const ev of evs){
-      if(!ev||!(+ev.id>lastEv))continue; lastEv=+ev.id;
-      if(ev.type==='voice'){if(VOZ_KEY_OK.test(String(ev.key)))playEvent({type:'voice',key:ev.key,team:(+ev.team||0)&1});continue;}
-      playEvent({type:ev.type==='toast'?'toast':'say',seat:(+ev.seat||0)&3,text:String(ev.text||'').slice(0,40),kind:['call','accept','run'].includes(ev.kind)?ev.kind:'chat'});
-    }
-    if(modalKind==='lobby'&&!(ME<0))closeModal(); else refreshLobby();
-    render(); phaseFx(G);
-    if(G.phase==='over'){if(modalKind!=='over')showOnlineOver();}
-    else if(modalKind==='over')closeModal();
+    const n=+st.n||0, hpk=typeof host.presence.hpk==='string'?host.presence.hpk:null;
+    const enc=ME>=0&&st.pv?st.pv[ME]:null;
+    const apply=priv=>{
+      if(n<appliedN||MODE!=='online')return; appliedN=n;
+      const evs=Array.isArray(st.ev)?st.ev:[];
+      if(st.gid!==lastGid){lastGid=st.gid;GID=String(st.gid);lastEv=evs.reduce((m,e)=>Math.max(m,+e.id||0),0);shown=0;}
+      LOBBY=false;G=g;PRIV=priv;awaiting=false;
+      for(const ev of evs){
+        if(!ev||!(+ev.id>lastEv))continue; lastEv=+ev.id;
+        if(ev.type==='voice'){if(VOZ_KEY_OK.test(String(ev.key)))playEvent({type:'voice',key:ev.key,team:(+ev.team||0)&1});continue;}
+        playEvent({type:ev.type==='toast'?'toast':'say',seat:(+ev.seat||0)&3,text:String(ev.text||'').slice(0,40),kind:['call','accept','run'].includes(ev.kind)?ev.kind:'chat'});
+      }
+      if(modalKind==='lobby'&&!(ME<0))closeModal(); else refreshLobby();
+      render(); phaseFx(G);
+      if(G.phase==='over'){if(modalKind!=='over')showOnlineOver();}
+      else if(modalKind==='over')closeModal();
+    };
+    if(enc&&hpk)Cry.dec(hpk,enc).then(b=>{if(!b||b.n!==n||b.s!==ME)throw 0;apply(privFrom(b));}).catch(()=>apply(null));
+    else apply(null);
   }else{
     LOBBY=true;G=null;
     if(modalKind!=='lobby')showLobby();else refreshLobby();
@@ -1042,7 +1183,10 @@ const RULES=`<details class="rules"><summary>Regras rápidas</summary><ul>
 <li><b>Manilha</b> é a carta seguinte à vira. Entre manilhas: ouros &lt; espadas &lt; copas &lt; paus (o zap). Na sua mão elas têm uma ★.</li>
 <li>Cada mão é melhor de 3 rodadas. Se a primeira empatar, quem ganhar a segunda leva.</li>
 <li>Na sua vez você pode pedir <b>truco</b> (3), e o pedido sobe pra 6, 9 e 12. Quem corre entrega o valor anterior.</li>
-<li><b>Mão de 11</b>: a dupla vê as cartas do parceiro e decide se joga, valendo 3.</li>
+<li><b>Dar as cartas</b>: o carteador da vez distribui e só ele vê a primeira carta que o parceiro recebeu.</li>
+<li>No <b>primeiro truco</b> da mão, a dupla desafiada pode ver as cartas do parceiro antes de responder. No seis, nove e doze, não.</li>
+<li><b>Mão de 11</b>: a dupla com 11 pode ver as cartas do parceiro e decide se joga, valendo 3. Sem truco.</li>
+<li><b>Mão de ferro</b> (11 a 11): cartas viradas para todos, até para você. Escolha às cegas; quem ganhar a mão leva o jogo.</li>
 <li>Quem fizer <b>12 pontos</b> primeiro ganha.</li></ul></details>`;
 const segHTML=()=>`<div class="seg" role="radiogroup" aria-label="Dificuldade">${[['facil','Fácil'],['medio','Médio'],['dificil','Difícil']].map(([k,l])=>`<button role="radio" aria-checked="${k===diff}" data-d="${k}">${l}</button>`).join('')}</div>`;
 function openModal(kind,html){modalKind=kind;$('modal').innerHTML=html;$('modal').hidden=false;const f=$('modal').querySelector('[data-a]');if(f&&kind!=='lobby')f.focus({preventScroll:true});}
@@ -1122,10 +1266,11 @@ $('hand').addEventListener('click',e=>{
   const b=e.target.closest('[data-i]'); if(!b||!G||G.phase!=='play'||G.turn!==ME)return;
   doAct({k:'play',i:+b.dataset.i});
 });
-$('actions').addEventListener('click',e=>{if(e.target.closest('#btnTruco'))doAct({k:'truco'});});
+$('actions').addEventListener('click',e=>{if(e.target.closest('#btnTruco'))doAct({k:'truco'});else if(e.target.closest('#btnDeal'))doAct({k:'deal'});});
 $('sheet').addEventListener('click',e=>{
-  const r=e.target.closest('[data-r]'), m=e.target.closest('[data-m]');
-  if(r)doAct({k:'resp',r:r.dataset.r}); else if(m)doAct({k:'m11',p:m.dataset.m==='1'});
+  const r=e.target.closest('[data-r]'), m=e.target.closest('[data-m]'), k=e.target.closest('[data-k]'), c=e.target.closest('[data-c]');
+  if(c){consultOpen=!consultOpen;render();return;}
+  if(r)doAct({k:'resp',r:r.dataset.r}); else if(m)doAct({k:'m11',p:m.dataset.m==='1'}); else if(k)doAct({k:'dealok'});
 });
 $('menuBtn').addEventListener('click',()=>{if(MODE==='online')showLobby();else showMenu({ongoing:true});});
 $('sndBtn').addEventListener('click',()=>{Snd.on=!Snd.on;store.set('truco.sound',Snd.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(Snd.on)Snd.accept();else Voz.stopAll();});
@@ -1158,7 +1303,7 @@ function FakeRoom(){
       leave:async()=>{alive=false;clearInterval(hb);bc.postMessage({peer:me,bye:1});bc.close();hs.clear();}};
   }};
 }
-if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
+if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,Cry,get PRIV(){return PRIV;},get RM(){return RM;},privateView,myView,get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
 
 initSeats(); renderSnd();
 if(window.claude&&window.claude.use)getRoomNS(); // no claude.ai já pede a sala; fora dele o Firebase só conecta quando você for jogar online
