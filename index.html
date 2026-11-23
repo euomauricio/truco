@@ -71,6 +71,15 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .snd-btn{top:auto;bottom:16px;right:16px}
 .voz-btn{top:auto;bottom:16px;right:60px}
 .dica-btn{top:auto;bottom:16px;right:104px}
+.mic-btn{top:auto;bottom:16px;left:16px}
+.mic-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mic-btn.on{background:var(--us)}
+.mic-btn.on svg{stroke:var(--btn-ink)}
+.mic-btn.talking{box-shadow:0 0 0 4px rgba(102,217,160,.45)}
+.seat.talking .avatar{box-shadow:0 0 0 4px var(--us);animation:talk .9s ease-in-out infinite}
+@keyframes talk{50%{box-shadow:0 0 0 7px rgba(102,217,160,.35)}}
+.micx{position:absolute;top:24px;left:6px;width:18px;height:18px;border-radius:50%;background:var(--panel);display:grid;place-items:center;z-index:3}
+.micx svg{width:12px;height:12px;fill:none;stroke:var(--them);stroke-width:2.4;stroke-linecap:round}
 .dica-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .dica-btn[aria-pressed="true"]{background:var(--gold)}
 .dica-btn[aria-pressed="true"] svg{stroke:var(--btn-ink)}
@@ -255,6 +264,7 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
   </header>
   <main class="table" id="table">
     <div class="vira" id="vira"></div>
+    <button class="tbtn mic-btn" id="micBtn" aria-label="Microfone desligado" hidden></button>
     <button class="tbtn dica-btn" id="dicaBtn" aria-label="Dicas"></button>
     <button class="tbtn voz-btn" id="vozBtn" aria-label="Vozes"></button>
     <button class="tbtn snd-btn" id="sndBtn" aria-label="Som"></button>
@@ -275,6 +285,7 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
   <footer class="actions" id="actions"></footer>
 </div>
 <div class="modal" id="modal" hidden></div>
+<div id="vozes-amigos" hidden></div>
 <script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-app-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-database-compat.js"></script>
 
@@ -739,6 +750,9 @@ let tapped=false; document.addEventListener('pointerdown',()=>{tapped=true;},{pa
 /* voz do tiozão: arquivos em sons/, uma fala por vez (truco e aumentos interrompem) */
 /* Lista de vozes por momento: lida de sons/vozes.json (editável sem mexer no código).
    Se o arquivo não carregar, vale esta lista embutida. Momento sem arquivo = silêncio. */
+/* Vozes gravadas do jogo (Guido): desligadas por enquanto. Os arquivos em sons/ e todo o código continuam aqui;
+   troque para true para voltar como era (pré-carga, falas, botão 💬 e a espera do bot pelo anúncio da vira). */
+const VOZES_JOGO_ATIVAS=false;
 const VOZ_RESERVA={truco:['truco_1.mp3','truco_2.mp3','truco_3.mp3'],seis:['seis.mp3'],nove:['nove.mp3'],doze:['doze.mp3'],
   aceita:['aceita_1.mp3','aceita_2.mp3'],corre:['corre_1.mp3','corre_2.mp3'],zap:['zap_1.mp3'],manilha:['zap_2.mp3'],
   mao11:['mao11.mp3'],ganhou_mao:['ganhou_mao.mp3'],fim_vitoria:['fim_vitoria.mp3'],fim_derrota:['fim_derrota.mp3']};
@@ -762,6 +776,7 @@ const Voz={
     for(const files of Object.values(out))for(const f of files)if(!this.a[f]){try{const el=new Audio('sons/'+f);el.preload='auto';this.a[f]=el;}catch(e){}} // só para deixar no cache
   },
   async load(){
+    if(!VOZES_JOGO_ATIVAS)return; // nada de baixar mp3 nem vozes.json
     let j=null;
     try{const r=await fetch('sons/vozes.json',{cache:'no-cache'});if(r.ok)j=await r.json();}catch(e){}
     this.setList(j&&typeof j==='object'&&!Array.isArray(j)?j:VOZ_RESERVA); // sem vozes.json, vale a lista embutida
@@ -782,7 +797,7 @@ const Voz={
     if(was.startsWith('vira_')&&this.next&&!this.announcing()){const n=this.next;this.next=null;this.play(n);}
   },
   unlock(){ // primeiro toque: libera 6 players com um som mudo
-    if(this.unlocked)return; this.unlocked=true;
+    if(this.unlocked||!VOZES_JOGO_ATIVAS)return; this.unlocked=true;
     const sil=this.silence();
     for(let i=0;i<6;i++){
       const p=this.player(); this.pool.push(p);
@@ -793,7 +808,7 @@ const Voz={
   playing(){return this.pool.filter(p=>p.busy&&!p.ended);},
   announcing(){return this.playing().some(p=>p.moment.startsWith('vira_'));},
   play(moment){
-    if(!Snd.on||!this.on||!this.unlocked)return;
+    if(!VOZES_JOGO_ATIVAS||!Snd.on||!this.on||!this.unlocked)return;
     const files=(this.list[moment]||[]).filter(f=>this.a[f]); if(!files.length)return;
     const sempre=VOZ_SEMPRE.has(moment)||moment.startsWith('vira_');
     const ativos=this.playing().length;
@@ -804,8 +819,10 @@ const Voz={
     let p=this.pool.find(x=>!x.busy);
     if(!p){p=this.player();this.pool.push(p);} // todos ocupados: um player extra (no iPhone pode não tocar)
     p.busy=true; p.moment=moment;
-    try{p.muted=false;p.src='sons/'+f;const r=p.play();if(r)r.catch(()=>this.done(p));}catch(e){this.done(p);}
+    try{p.muted=false;p.volume=this.ducked?.4:1;p.src='sons/'+f;const r=p.play();if(r)r.catch(()=>this.done(p));}catch(e){this.done(p);}
   },
+  ducked:false,
+  duck(on){if(on===this.ducked)return;this.ducked=on;for(const p of this.pool)try{p.volume=on?.4:1;}catch(e){}}, // no iPhone o volume do elemento é fixo
   stopAll(){this.next=null;for(const p of this.pool){if(p.busy){try{p.pause();}catch(e){}this.done(p);}}} // só quando o usuário desliga
 };
 Voz.load();
@@ -915,7 +932,7 @@ function cardHTML(c,o={}){
   return `<${tag} class="card face${man?' man':''}" ${o.attr||''} aria-label="${c.r} de ${SUIT_NAMES[c.s]}${man?', manilha':''}">${cardSVG(c)}</${tag}>`;
 }
 function initSeats(){
-  for(const p of [1,2,3])$('seat'+p).innerHTML=`<div class="sig" id="sig${p}" aria-hidden="true"></div><div class="avatar" id="av${p}"></div><div class="name" id="nm${p}"></div><div class="backs" id="backs${p}"></div><div class="bubble" id="bub${p}"></div>`;
+  for(const p of [1,2,3])$('seat'+p).innerHTML=`<div class="sig" id="sig${p}" aria-hidden="true"></div><div class="micx" id="micx${p}" hidden aria-label="sem microfone"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M4 4l16 16"/></svg></div><div class="avatar" id="av${p}"></div><div class="name" id="nm${p}"></div><div class="backs" id="backs${p}"></div><div class="bubble" id="bub${p}"></div>`;
 }
 function renderSnd(){
   $('sndBtn').innerHTML=`<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/>${Snd.on?'<path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>':'<path d="M17 9l5 6M22 9l-5 6"/>'}</svg>`;
@@ -923,6 +940,7 @@ function renderSnd(){
   $('vozBtn').innerHTML=`<svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/>${Voz.on?'<path d="M8 9.5h8M8 12.5h5"/>':'<path d="M3 3l18 18"/>'}</svg>`;
   $('vozBtn').setAttribute('aria-label',Voz.on?'Vozes ligadas':'Vozes desligadas');
   $('vozBtn').setAttribute('aria-pressed',Voz.on?'true':'false');
+  $('vozBtn').hidden=!VOZES_JOGO_ATIVAS; $('dicaBtn').style.right=VOZES_JOGO_ATIVAS?'':'60px'; // sem o 💬, o 💡 encosta no 🔊
   $('dicaBtn').innerHTML='<svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>';
   $('dicaBtn').setAttribute('aria-pressed',DICAS?'true':'false');
   $('dicaBtn').setAttribute('aria-label',DICAS?'Dicas ligadas':'Dicas desligadas');
@@ -1214,7 +1232,7 @@ function FirebaseRoom(fb){
       hs.forEach(h=>{try{h(ch);}catch(e){console.error(e);}});
     };
     const write=()=>mine.set({j:JSON.stringify(pres),t:fb.database.ServerValue.TIMESTAMP});
-    const api={name:code,
+    const api={name:code,kind:'firebase',db,me,code,
       presence(patch){const next=Object.assign({},pres);for(const k in patch){if(patch[k]===null)delete next[k];else next[k]=patch[k];}pres=next;return write();},
       peers:()=>snap,
       onPeers(h,onErr){hs.add(h);if(onErr)errs.add(onErr);if(ready)queueMicrotask(()=>h({peers:snap,joined:snap,left:[],updated:[]}));return()=>{hs.delete(h);if(onErr)errs.delete(onErr);};},
@@ -1255,11 +1273,13 @@ async function enterTable(code,host){
   joinedAt=Date.now();hostSeenAt=host?Date.now():0;
   await RM.presence({n:nick,want:host?0:null,act:null,host:host?true:null,st:null,pk:Cry.pub}).catch(()=>{});
   unsubPeers=RM.onPeers(onRoomPeers,()=>lostTable('A conexão com a mesa caiu.'));
+  if(r.kind==='firebase'){RM.presence({mic:false}).catch(()=>{});VC.start();}
   if(host)publish();
   clearInterval(hostWatch);hostWatch=setInterval(watchHost,1000);
   showLobby();
 }
 function leaveTable(){
+  VC.stop();
   clearInterval(hostWatch);clearTimeout(timer);
   if(unsubPeers)try{unsubPeers();}catch(e){}
   if(RM)RM.leave().catch(()=>{});
@@ -1277,6 +1297,7 @@ function watchHost(){
 function onRoomPeers(){
   if(!RM)return;
   const peers=RM.peers(), me=peers.find(p=>p.sameTab); if(me)MYPEER=me.peer;
+  VC.sync(peers);
   if(IS_HOST)hostReconcile(peers);else clientSync(peers);
 }
 function hostReconcile(peers){
@@ -1351,6 +1372,155 @@ function hostStart(){
 }
 function hostAgain(){if(!IS_HOST)return;clearTimeout(timer);LOBBY=true;G=null;publish();showLobby();}
 
+/* ---------- chat de voz (mesa online via Firebase) ----------
+   WebRTC em malha: cada humano conecta com cada outro (até 6 conexões com 4 pessoas), só áudio.
+   Sinalização em rooms/CODE/rtc/<idMenor>_<idMaior>/{offer,answer,restart,ice/<geração>/<id>}; o id menor faz a offer.
+   A conexão sobe assim que os dois estão na mesa (você ouve todo mundo mesmo com o microfone desligado);
+   ligar o microfone só troca a faixa enviada (replaceTrack), sem renegociar. Nada é gravado. */
+const TURN_URL='https://trucodeboteco.metered.live/api/v1/turn/credentials?apiKey=6f9ac45d506455849e1aaca3dc98eb366c56';
+const ICE_FALLBACK=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.relay.metered.ca:80'}];
+const VC_TEST=QS.has('test'), VC_FAKEMIC=QS.has('fakemic');
+const VC={
+  on:false, base:null, me:null, ice:ICE_FALLBACK, pairs:new Map(), local:null, micOn:false, lan:null, lbuf:null,
+  talkingMe:false, tickT:null, holdMe:0,
+  available(){return MODE==='online'&&!!RM&&RM.kind==='firebase'&&!!window.RTCPeerConnection;},
+  async start(){
+    if(this.on||!this.available())return;
+    this.on=true; this.me=RM.me; this.base=RM.db.ref('rooms/'+RM.code+'/rtc');
+    try{const r=await fetch(TURN_URL);if(r.ok){const j=await r.json();if(Array.isArray(j)&&j.length)this.ice=j;}}catch(e){} // TURN: necessário no 4G com CGNAT
+    if(!this.on)return;
+    this.tickT=setInterval(()=>this.tick(),120);
+    this.sync(RM.peers());
+  },
+  key(o){return this.me<o?this.me+'_'+o:o+'_'+this.me;},
+  sync(peers){
+    if(!this.on||!this.base)return;
+    const ids=new Set(peers.filter(p=>!p.sameTab&&p.kind!=='agent').map(p=>p.peer));
+    for(const id of ids)if(!this.pairs.has(id))this.connect(id);
+    for(const id of [...this.pairs.keys()])if(!ids.has(id))this.drop(id,true);
+  },
+  connect(id){
+    const P={id,gen:0,pc:null,sender:null,audio:null,an:null,buf:null,talking:false,hold:0,bad:0,ref:this.base.child(this.key(id)),offerer:this.me<id,pend:[],offs:[],lastRestart:0};
+    this.pairs.set(id,P);
+    P.ref.onDisconnect().remove();
+    if(P.offerer){this.listenOfferer(P);this.offer(P,1);}else this.listenAnswerer(P);
+  },
+  newPC(P,gen){
+    if(P.pc)try{P.pc.close();}catch(e){}
+    P.offs.filter(f=>f.ice).forEach(f=>f());P.offs=P.offs.filter(f=>!f.ice);
+    const pc=new RTCPeerConnection({iceServers:this.ice}); P.pc=pc; P.gen=gen; P.pend=[]; P.bad=0;
+    pc.onicecandidate=e=>{if(e.candidate&&P.gen===gen&&P.pc===pc)P.ref.child('ice/'+gen+'/'+this.me).push(JSON.stringify(e.candidate.toJSON()));};
+    pc.ontrack=e=>this.attach(P,e.streams&&e.streams[0]?e.streams[0]:new MediaStream([e.track]));
+    pc.oniceconnectionstatechange=()=>{const st=pc.iceConnectionState;if(st==='failed'||st==='disconnected'){if(!P.bad)P.bad=Date.now();}else P.bad=0;};
+    const iref=P.ref.child('ice/'+gen+'/'+P.id);
+    const cb=iref.on('child_added',snap=>{let c;try{c=JSON.parse(snap.val());}catch(e){return;}if(P.pc!==pc)return;
+      if(pc.remoteDescription)pc.addIceCandidate(c).catch(()=>{});else P.pend.push(c);});
+    const off=()=>iref.off('child_added',cb); off.ice=true; P.offs.push(off);
+    return pc;
+  },
+  async offer(P,gen){
+    const pc=this.newPC(P,gen);
+    const tr=pc.addTransceiver('audio',{direction:'sendrecv'}); P.sender=tr.sender;
+    if(this.local)await tr.sender.replaceTrack(this.local.getAudioTracks()[0]).catch(()=>{});
+    await pc.setLocalDescription(await pc.createOffer());
+    if(P.pc===pc)await P.ref.child('offer').set({sdp:pc.localDescription.sdp,gen,t:Date.now()});
+  },
+  listenOfferer(P){
+    const aref=P.ref.child('answer');
+    const cb=aref.on('value',async snap=>{const a=snap.val();const pc=P.pc;
+      if(!a||a.gen!==P.gen||!pc||pc.signalingState!=='have-local-offer')return;
+      try{await pc.setRemoteDescription({type:'answer',sdp:a.sdp});for(const c of P.pend.splice(0))pc.addIceCandidate(c).catch(()=>{});}catch(e){}});
+    P.offs.push(()=>aref.off('value',cb));
+    const rref=P.ref.child('restart');
+    const cb2=rref.on('value',snap=>{const r=+snap.val()||0;if(r>P.lastRestart){P.lastRestart=r;if(P.pc)this.offer(P,P.gen+1);}});
+    P.offs.push(()=>rref.off('value',cb2));
+  },
+  listenAnswerer(P){
+    const oref=P.ref.child('offer');
+    const cb=oref.on('value',async snap=>{const o=snap.val();if(!o||!(o.gen>P.gen))return;
+      const pc=this.newPC(P,o.gen);
+      try{
+        await pc.setRemoteDescription({type:'offer',sdp:o.sdp});
+        const tr=pc.getTransceivers()[0];
+        if(tr){tr.direction='sendrecv';P.sender=tr.sender;if(this.local)await tr.sender.replaceTrack(this.local.getAudioTracks()[0]).catch(()=>{});}
+        await pc.setLocalDescription(await pc.createAnswer());
+        if(P.pc===pc){await P.ref.child('answer').set({sdp:pc.localDescription.sdp,gen:o.gen});for(const c of P.pend.splice(0))pc.addIceCandidate(c).catch(()=>{});}
+      }catch(e){console.warn('voz',e);}});
+    P.offs.push(()=>oref.off('value',cb));
+  },
+  attach(P,stream){
+    if(!P.audio){const el=document.createElement('audio');el.autoplay=true;el.setAttribute('playsinline','');$('vozes-amigos').appendChild(el);P.audio=el;}
+    P.audio.srcObject=stream; P.audio.muted=VC_TEST||!Snd.on; P.audio.play().catch(()=>{});
+    Snd.init();
+    if(Snd.ctx)try{const src=Snd.ctx.createMediaStreamSource(stream);P.an=Snd.ctx.createAnalyser();P.an.fftSize=512;src.connect(P.an);P.buf=new Float32Array(512);P.src=src;}catch(e){}
+  },
+  level(an,buf){if(!an)return 0;an.getFloatTimeDomainData(buf);let s=0;for(let i=0;i<buf.length;i++)s+=buf[i]*buf[i];return Math.sqrt(s/buf.length);},
+  drop(id,removeNode){
+    const P=this.pairs.get(id); if(!P)return; this.pairs.delete(id);
+    P.offs.forEach(f=>{try{f();}catch(e){}});
+    try{P.pc&&P.pc.close();}catch(e){}
+    try{P.src&&P.src.disconnect();}catch(e){}
+    if(P.audio){P.audio.srcObject=null;P.audio.remove();}
+    try{P.ref.onDisconnect().cancel();}catch(e){}
+    if(removeNode)P.ref.remove().catch(()=>{});
+  },
+  tick(){
+    const now=Date.now(); let anyRemote=false;
+    for(const P of this.pairs.values()){
+      if(P.audio)P.audio.muted=VC_TEST||!Snd.on; // o 🔊 geral também silencia os amigos
+      const lv=this.level(P.an,P.buf);
+      if(lv>.015)P.hold=now+350; P.talking=now<P.hold; if(P.talking)anyRemote=true;
+      if(P.bad&&now-P.bad>5000){P.bad=0;if(P.offerer)this.offer(P,P.gen+1);else P.ref.child('restart').set(now).catch(()=>{});} // caiu: refaz a offer
+    }
+    if(this.micOn&&this.lan){if(this.level(this.lan,this.lbuf)>.015)this.holdMe=now+350;}
+    this.talkingMe=this.micOn&&now<this.holdMe;
+    Voz.duck(anyRemote);
+    renderTalk();
+  },
+  async toggleMic(){
+    if(!this.on)return;
+    if(!this.local){
+      try{this.local=VC_FAKEMIC?fakeMicStream():await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});}
+      catch(e){toast('Permita o microfone nas configurações do navegador.',2800);return;}
+      const t=this.local.getAudioTracks()[0];
+      for(const P of this.pairs.values())if(P.sender)P.sender.replaceTrack(t).catch(()=>{});
+      Snd.init();
+      if(Snd.ctx)try{const src=Snd.ctx.createMediaStreamSource(this.local);this.lan=Snd.ctx.createAnalyser();this.lan.fftSize=512;src.connect(this.lan);this.lbuf=new Float32Array(512);}catch(e){}
+      this.micOn=true;
+    }else{this.micOn=!this.micOn;this.local.getAudioTracks().forEach(t=>{t.enabled=this.micOn;});}
+    if(RM)RM.presence({mic:this.micOn}).catch(()=>{});
+    renderTalk();
+  },
+  resume(){for(const P of this.pairs.values())if(P.audio&&P.audio.paused)P.audio.play().catch(()=>{});},
+  stop(){
+    if(!this.on)return; this.on=false; clearInterval(this.tickT);
+    for(const id of [...this.pairs.keys()])this.drop(id,true);
+    if(this.local){this.local.getTracks().forEach(t=>t.stop());this.local=null;}
+    this.micOn=false;this.lan=null;this.talkingMe=false;Voz.duck(false);renderTalk();
+  }
+};
+function fakeMicStream(){ // só em teste (?fakemic): um tom no lugar do microfone, sem pedir permissão
+  Snd.init(); const c=Snd.ctx, o=c.createOscillator(), g=c.createGain(), d=c.createMediaStreamDestination();
+  o.frequency.value=330; g.gain.value=.3; o.connect(g).connect(d); o.start(); return d.stream;
+}
+function renderTalk(){
+  const b=$('micBtn'); if(!b)return;
+  const show=VC.on&&MODE==='online';
+  b.hidden=!show;
+  if(show){
+    b.classList.toggle('on',VC.micOn); b.classList.toggle('talking',VC.talkingMe);
+    b.setAttribute('aria-pressed',VC.micOn?'true':'false'); b.setAttribute('aria-label',VC.micOn?'Microfone ligado':'Microfone desligado');
+    b.innerHTML=`<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>${VC.micOn?'':'<path d="M4 4l16 16"/>'}</svg>`;
+  }
+  const peers=RM?RM.peers():[];
+  for(const p of [1,2,3]){
+    const s=(VIEW()+p)%4, x=SEATS[s], el=$('seat'+p); if(!el)continue;
+    const P=x&&VC.pairs.get(x.p), pr=x&&peers.find(q=>q.peer===x.p);
+    el.classList.toggle('talking',!!(show&&P&&P.talking));
+    const mx=$('micx'+p); if(mx)mx.hidden=!(show&&x&&!(pr&&pr.presence&&pr.presence.mic)); // humano sem microfone ligado
+  }
+}
+
 /* ---------- telas ---------- */
 const RULES=`<details class="rules"><summary>Regras rápidas</summary><ul>
 <li>Baralho espanhol de 40 cartas. Da mais fraca à mais forte: <b>4 5 6 7 10 11 12 1 2 3</b>.</li>
@@ -1417,7 +1587,7 @@ function showOnlineOver(){
 }
 function showOver(){if(MODE==='solo')showMenu({over:true});else showOnlineOver();}
 
-document.addEventListener('pointerdown',()=>{Snd.init();Voz.unlock();},{passive:true});
+document.addEventListener('pointerdown',()=>{Snd.init();Voz.unlock();VC.resume();},{passive:true});
 $('modal').addEventListener('click',e=>{
   Snd.init();
   const d=e.target.closest('[data-d]');
@@ -1470,6 +1640,7 @@ $('sheet').addEventListener('click',e=>{
 });
 $('menuBtn').addEventListener('click',()=>{if(MODE==='online')showLobby();else showMenu({ongoing:true});});
 $('sndBtn').addEventListener('click',()=>{Snd.on=!Snd.on;store.set('truco.sound',Snd.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(Snd.on)Snd.accept();else Voz.stopAll();});
+$('micBtn').addEventListener('click',()=>{Snd.init();VC.toggleMic();});
 $('dicaBtn').addEventListener('click',()=>{DICAS=!DICAS;store.set('truco.dicas',DICAS?'1':'0');hintCache={key:''};tempH=null;renderSnd();if(G)render();});
 $('vozBtn').addEventListener('click',()=>{Voz.on=!Voz.on;store.set('truco.voices',Voz.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(!Voz.on)Voz.stopAll();});
 
@@ -1500,7 +1671,7 @@ function FakeRoom(){
       leave:async()=>{alive=false;clearInterval(hb);bc.postMessage({peer:me,bye:1});bc.close();hs.clear();}};
   }};
 }
-if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,Cry,get PRIV(){return PRIV;},get RM(){return RM;},privateView,myView,hintGame,computeHint,get hintCache(){return hintCache;},forceTruco(seat){actTruco(G,seat);step();},get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
+if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,Cry,get PRIV(){return PRIV;},get RM(){return RM;},privateView,myView,hintGame,computeHint,get hintCache(){return hintCache;},forceTruco(seat){actTruco(G,seat);step();},VC,get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
 
 initSeats(); renderSnd();
 if(window.claude&&window.claude.use)getRoomNS(); // no claude.ai já pede a sala; fora dele o Firebase só conecta quando você for jogar online
