@@ -68,7 +68,9 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .vira-lbl b{color:var(--gold);font-weight:900}
 .tbtn{position:absolute;top:16px;width:38px;height:38px;border-radius:50%;background:var(--chip);font-size:18px;display:grid;place-items:center}
 .menu-btn{right:16px}
-.snd-btn{right:60px}
+.snd-btn{top:auto;bottom:16px;right:16px}
+.voz-btn{top:auto;bottom:16px;right:60px}
+.voz-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .snd-btn svg{width:20px;height:20px;fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
 .seat{position:absolute;display:flex;flex-direction:column;align-items:center;gap:3px;width:72px;text-align:center}
@@ -228,6 +230,7 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
   </header>
   <main class="table" id="table">
     <div class="vira" id="vira"></div>
+    <button class="tbtn voz-btn" id="vozBtn" aria-label="Vozes"></button>
     <button class="tbtn snd-btn" id="sndBtn" aria-label="Som"></button>
     <button class="tbtn menu-btn" id="menuBtn" aria-label="Menu">☰</button>
     <div class="seat s2 partner" id="seat2"></div>
@@ -615,8 +618,13 @@ const VOZ_RESERVA={truco:['truco_1.mp3','truco_2.mp3','truco_3.mp3'],seis:['seis
 const VOZ_CALL={'TRUCO!':'truco','SEIS!':'seis','NOVE!':'nove','DOZE!':'doze'};
 const VOZ_SEMPRE=new Set(['truco','seis','nove','doze','corre']); // sempre tocam, interrompendo o que estiver tocando
 const VOZ_KEY_OK=/^[A-Za-z0-9_]{1,32}$/, VOZ_FILE_OK=/^[A-Za-z0-9_.-]{1,64}\.mp3$/;
+/* Cada fala toca até o fim: nada pausa nem reinicia uma voz em andamento.
+   As falas saem de um conjunto de players liberados no primeiro toque (o iPhone exige),
+   então várias podem tocar juntas. Os efeitos de carta usam Web Audio, separados. */
+const VOZ_MAX_COMUNS=2; // vozes comuns só entram se houver menos que isso tocando
 const Voz={
-  list:{}, a:{}, last:{}, cur:null, curMoment:'', next:null, unlocked:false, freed:new Set(),
+  list:{}, a:{}, last:{}, pool:[], next:null, unlocked:false,
+  on:store.get('truco.voices')!=='0',
   setList(obj){
     const out={};
     for(const [k,v] of Object.entries(obj||{})){
@@ -624,39 +632,54 @@ const Voz={
       out[k]=v.filter(f=>typeof f==='string'&&VOZ_FILE_OK.test(f));
     }
     this.list=out;
-    for(const files of Object.values(out))for(const f of files)if(!this.a[f]){try{const el=new Audio('sons/'+f);el.preload='auto';this.a[f]=el;}catch(e){}}
-    if(this.unlocked)this.free();
+    for(const files of Object.values(out))for(const f of files)if(!this.a[f]){try{const el=new Audio('sons/'+f);el.preload='auto';this.a[f]=el;}catch(e){}} // só para deixar no cache
   },
   async load(){
     let j=null;
     try{const r=await fetch('sons/vozes.json',{cache:'no-cache'});if(r.ok)j=await r.json();}catch(e){}
     this.setList(j&&typeof j==='object'&&!Array.isArray(j)?j:VOZ_RESERVA); // sem vozes.json, vale a lista embutida
   },
-  free(){ // libera o áudio no toque do usuário (Safari exige), inclusive arquivos que chegaram depois
-    for(const el of Object.values(this.a)){
-      if(this.freed.has(el))continue; this.freed.add(el);
-      try{el.muted=true;const p=el.play();if(p)p.then(()=>{if(el!==Voz.cur){el.pause();el.currentTime=0;}el.muted=false;},()=>{el.muted=false;});}catch(e){}
+  silence(){ // 50 ms de silêncio em WAV, para liberar os players sem som
+    if(this._sil)return this._sil;
+    const n=400,b=new ArrayBuffer(44+n),v=new DataView(b),w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i));};
+    w(0,'RIFF');v.setUint32(4,36+n,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+    v.setUint32(24,8000,true);v.setUint32(28,8000,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,'data');v.setUint32(40,n,true);
+    for(let i=0;i<n;i++)v.setUint8(44+i,128);
+    try{this._sil=URL.createObjectURL(new Blob([b],{type:'audio/wav'}));}catch(e){this._sil='';}
+    return this._sil;
+  },
+  player(){const p=new Audio();p.preload='auto';p.moment='';p.busy=false;
+    p.addEventListener('ended',()=>this.done(p));p.addEventListener('error',()=>this.done(p));return p;},
+  done(p){
+    if(!p.busy)return; const was=p.moment; p.busy=false; p.moment='';
+    if(was.startsWith('vira_')&&this.next&&!this.announcing()){const n=this.next;this.next=null;this.play(n);}
+  },
+  unlock(){ // primeiro toque: libera 6 players com um som mudo
+    if(this.unlocked)return; this.unlocked=true;
+    const sil=this.silence();
+    for(let i=0;i<6;i++){
+      const p=this.player(); this.pool.push(p);
+      if(!sil)continue;
+      try{p.src=sil;p.muted=true;const r=p.play();if(r)r.then(()=>{if(!p.busy)p.pause();p.muted=false;},()=>{p.muted=false;});}catch(e){}
     }
   },
-  unlock(){this.unlocked=true;this.free();},
-  busy(){const c=this.cur;return !!(c&&!c.paused&&!c.ended&&!c.muted);},
-  announcing(){return this.busy()&&this.curMoment.startsWith('vira_');},
+  playing(){return this.pool.filter(p=>p.busy&&!p.ended);},
+  announcing(){return this.playing().some(p=>p.moment.startsWith('vira_'));},
   play(moment){
-    if(!Snd.on||!this.unlocked)return;
+    if(!Snd.on||!this.on||!this.unlocked)return;
     const files=(this.list[moment]||[]).filter(f=>this.a[f]); if(!files.length)return;
-    const force=VOZ_SEMPRE.has(moment)||moment.startsWith('vira_');
-    if(this.busy()){
-      if(moment==='mao11'&&this.curMoment.startsWith('vira_')){this.next=moment;return;} // a mão de 11 fala logo depois da vira
-      if(!force)return;try{this.cur.pause();}catch(e){}
-    }
-    this.next=null; this.curMoment=moment;
+    const sempre=VOZ_SEMPRE.has(moment)||moment.startsWith('vira_');
+    const ativos=this.playing().length;
+    if(moment==='mao11'&&this.announcing()){this.next=moment;return;} // a mão de 11 fala logo depois da vira
+    if(!sempre&&ativos>=VOZ_MAX_COMUNS)return;
     let opts=files; if(files.length>1&&this.last[moment])opts=files.filter(f=>f!==this.last[moment]);
     const f=pick(opts); this.last[moment]=f;
-    const el=this.a[f]; this.cur=el;
-    el.onended=()=>{if(Voz.cur===el&&Voz.next){const n=Voz.next;Voz.next=null;Voz.play(n);}};
-    try{el.muted=false;el.currentTime=0;const p=el.play();if(p)p.catch(()=>{});}catch(e){}
+    let p=this.pool.find(x=>!x.busy);
+    if(!p){p=this.player();this.pool.push(p);} // todos ocupados: um player extra (no iPhone pode não tocar)
+    p.busy=true; p.moment=moment;
+    try{p.muted=false;p.src='sons/'+f;const r=p.play();if(r)r.catch(()=>this.done(p));}catch(e){this.done(p);}
   },
-  stop(){if(this.cur)try{this.cur.pause();}catch(e){}}
+  stopAll(){this.next=null;for(const p of this.pool){if(p.busy){try{p.pause();}catch(e){}this.done(p);}}} // só quando o usuário desliga
 };
 Voz.load();
 function buzz(p){try{if(tapped&&Snd.on&&navigator.vibrate)navigator.vibrate(p);}catch(e){}}
@@ -693,6 +716,9 @@ function initSeats(){
 function renderSnd(){
   $('sndBtn').innerHTML=`<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/>${Snd.on?'<path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>':'<path d="M17 9l5 6M22 9l-5 6"/>'}</svg>`;
   $('sndBtn').setAttribute('aria-label',Snd.on?'Desligar som':'Ligar som');
+  $('vozBtn').innerHTML=`<svg viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/>${Voz.on?'<path d="M8 9.5h8M8 12.5h5"/>':'<path d="M3 3l18 18"/>'}</svg>`;
+  $('vozBtn').setAttribute('aria-label',Voz.on?'Vozes ligadas':'Vozes desligadas');
+  $('vozBtn').setAttribute('aria-pressed',Voz.on?'true':'false');
 }
 function statusText(g){
   if(ME<0)return 'Assistindo';
@@ -1102,7 +1128,8 @@ $('sheet').addEventListener('click',e=>{
   if(r)doAct({k:'resp',r:r.dataset.r}); else if(m)doAct({k:'m11',p:m.dataset.m==='1'});
 });
 $('menuBtn').addEventListener('click',()=>{if(MODE==='online')showLobby();else showMenu({ongoing:true});});
-$('sndBtn').addEventListener('click',()=>{Snd.on=!Snd.on;store.set('truco.sound',Snd.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(Snd.on)Snd.accept();else Voz.stop();});
+$('sndBtn').addEventListener('click',()=>{Snd.on=!Snd.on;store.set('truco.sound',Snd.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(Snd.on)Snd.accept();else Voz.stopAll();});
+$('vozBtn').addEventListener('click',()=>{Voz.on=!Voz.on;store.set('truco.voices',Voz.on?'1':'0');Snd.init();Voz.unlock();renderSnd();if(!Voz.on)Voz.stopAll();});
 
 /* sala simulada entre abas (só para testes locais com ?fakeroom) */
 function FakeRoom(){
