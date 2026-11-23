@@ -1,0 +1,15 @@
+{
+  "_como_usar": "Cada momento sorteia um arquivo da lista. Para adicionar ou trocar uma voz: coloque o .mp3 nesta pasta e ponha o nome aqui. Depois rode ./publicar.sh.",
+  "truco":       ["truco_1.mp3", "truco_2.mp3", "truco_3.mp3"],
+  "seis":        ["seis.mp3"],
+  "nove":        ["nove.mp3"],
+  "doze":        ["doze.mp3"],
+  "aceita":      ["aceita_1.mp3", "aceita_2.mp3"],
+  "corre":       ["corre_1.mp3", "corre_2.mp3", "corre_3.mp3"],
+  "zap":         ["zap_1.mp3"],
+  "manilha":     ["zap_2.mp3"],
+  "mao11":       ["mao11.mp3"],
+  "ganhou_mao":  ["ganhou_mao.mp3"],
+  "fim_vitoria": ["fim_vitoria.mp3"],
+  "fim_derrota": ["fim_derrota.mp3"]
+}

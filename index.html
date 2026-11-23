@@ -307,8 +307,8 @@ function actPlay(g,seat,idx){
   if(!c)throw new Error('carta inexistente');
   const prev=tableBest(g), pc=power(c,g.manilha);
   g.table.push({seat,card:c}); g.played.push({seat,card:c});
-  if(pc===13)g.events.push({type:'voice',key:'zap_1'});
-  else if(pc>=10&&prev&&prev.team!=='tie'&&prev.team!==team(seat)&&pc>prev.p)g.events.push({type:'voice',key:'zap_2'});
+  if(pc===13)g.events.push({type:'voice',key:'zap'});
+  else if(pc>=10&&prev&&prev.team!=='tie'&&prev.team!==team(seat)&&pc>prev.p)g.events.push({type:'voice',key:'manilha'});
   if(g.table.length===4)resolveTrick(g); else g.turn=(seat+1)%4;
 }
 function tableBest(g){
@@ -605,22 +605,47 @@ const Snd={
 };
 let tapped=false; document.addEventListener('pointerdown',()=>{tapped=true;},{passive:true,once:true});
 /* voz do tiozão: arquivos em sons/, uma fala por vez (truco e aumentos interrompem) */
-const VOZ_FILES=['truco_1','truco_2','truco_3','seis','nove','doze','aceita_1','aceita_2','corre_1','corre_2','zap_1','zap_2','mao11','ganhou_mao','fim_vitoria','fim_derrota'];
-const VOZ_CALL={'TRUCO!':['truco_1','truco_2','truco_3'],'SEIS!':['seis'],'NOVE!':['nove'],'DOZE!':['doze']};
-const VOZ_KEYS=['mao11','zap_1','zap_2','ganhou_mao','fim'];
+/* Lista de vozes por momento: lida de sons/vozes.json (editável sem mexer no código).
+   Se o arquivo não carregar, vale esta lista embutida. Momento sem arquivo = silêncio. */
+const VOZ_RESERVA={truco:['truco_1.mp3','truco_2.mp3','truco_3.mp3'],seis:['seis.mp3'],nove:['nove.mp3'],doze:['doze.mp3'],
+  aceita:['aceita_1.mp3','aceita_2.mp3'],corre:['corre_1.mp3','corre_2.mp3'],zap:['zap_1.mp3'],manilha:['zap_2.mp3'],
+  mao11:['mao11.mp3'],ganhou_mao:['ganhou_mao.mp3'],fim_vitoria:['fim_vitoria.mp3'],fim_derrota:['fim_derrota.mp3']};
+const VOZ_CALL={'TRUCO!':'truco','SEIS!':'seis','NOVE!':'nove','DOZE!':'doze'};
+const VOZ_SEMPRE=new Set(['truco','seis','nove','doze','corre']); // sempre tocam, interrompendo o que estiver tocando
+const VOZ_KEY_OK=/^[a-z0-9_]{1,32}$/, VOZ_FILE_OK=/^[A-Za-z0-9_.-]{1,64}\.mp3$/;
 const Voz={
-  a:{}, cur:null, unlocked:false,
-  load(){for(const n of VOZ_FILES){try{const el=new Audio('sons/'+n+'.mp3');el.preload='auto';this.a[n]=el;}catch(e){}}},
-  unlock(){ // o primeiro toque libera o áudio (Safari exige)
-    if(this.unlocked)return; this.unlocked=true;
-    for(const el of Object.values(this.a)){try{el.muted=true;const p=el.play();if(p)p.then(()=>{if(el!==Voz.cur){el.pause();el.currentTime=0;}el.muted=false;},()=>{el.muted=false;});}catch(e){}}
+  list:{}, a:{}, last:{}, cur:null, unlocked:false, freed:new Set(),
+  setList(obj){
+    const out={};
+    for(const [k,v] of Object.entries(obj||{})){
+      if(k.startsWith('_')||!VOZ_KEY_OK.test(k)||!Array.isArray(v))continue;
+      out[k]=v.filter(f=>typeof f==='string'&&VOZ_FILE_OK.test(f));
+    }
+    this.list=out;
+    for(const files of Object.values(out))for(const f of files)if(!this.a[f]){try{const el=new Audio('sons/'+f);el.preload='auto';this.a[f]=el;}catch(e){}}
+    if(this.unlocked)this.free();
   },
+  async load(){
+    let j=null;
+    try{const r=await fetch('sons/vozes.json',{cache:'no-cache'});if(r.ok)j=await r.json();}catch(e){}
+    this.setList(j&&typeof j==='object'&&!Array.isArray(j)?j:VOZ_RESERVA); // sem vozes.json, vale a lista embutida
+  },
+  free(){ // libera o áudio no toque do usuário (Safari exige), inclusive arquivos que chegaram depois
+    for(const el of Object.values(this.a)){
+      if(this.freed.has(el))continue; this.freed.add(el);
+      try{el.muted=true;const p=el.play();if(p)p.then(()=>{if(el!==Voz.cur){el.pause();el.currentTime=0;}el.muted=false;},()=>{el.muted=false;});}catch(e){}
+    }
+  },
+  unlock(){this.unlocked=true;this.free();},
   busy(){const c=this.cur;return !!(c&&!c.paused&&!c.ended&&!c.muted);},
-  play(names,interrupt){
+  play(moment){
     if(!Snd.on||!this.unlocked)return;
-    const el=this.a[pick(Array.isArray(names)?names:[names])]; if(!el)return;
-    if(this.busy()){if(!interrupt)return;try{this.cur.pause();}catch(e){}}
-    this.cur=el;
+    const files=(this.list[moment]||[]).filter(f=>this.a[f]); if(!files.length)return;
+    const force=VOZ_SEMPRE.has(moment);
+    if(this.busy()){if(!force)return;try{this.cur.pause();}catch(e){}}
+    let opts=files; if(files.length>1&&this.last[moment])opts=files.filter(f=>f!==this.last[moment]);
+    const f=pick(opts); this.last[moment]=f;
+    const el=this.a[f]; this.cur=el;
     try{el.muted=false;el.currentTime=0;const p=el.play();if(p)p.catch(()=>{});}catch(e){}
   },
   stop(){if(this.cur)try{this.cur.pause();}catch(e){}}
@@ -721,9 +746,9 @@ function playEvent(ev){
   if(ev.type==='toast'){toast(ev.text,1600);return;}
   if(ev.type==='voice'){Voz.play(ev.key==='fim'?(ev.team===myTeam()?'fim_vitoria':'fim_derrota'):ev.key);return;}
   say(ev.seat,ev.text,ev.kind==='call');
-  if(ev.kind==='call'){Snd.truco();Voz.play(VOZ_CALL[ev.text]||VOZ_CALL['TRUCO!'],true);if(team(ev.seat)!==myTeam())buzz([70,50,70]);}
-  else if(ev.kind==='accept'){Snd.accept();Voz.play(['aceita_1','aceita_2']);}
-  else if(ev.kind==='run'){Snd.run();Voz.play(['corre_1','corre_2']);}
+  if(ev.kind==='call'){Snd.truco();Voz.play(VOZ_CALL[ev.text]||'truco');if(team(ev.seat)!==myTeam())buzz([70,50,70]);}
+  else if(ev.kind==='accept'){Snd.accept();Voz.play('aceita');}
+  else if(ev.kind==='run'){Snd.run();Voz.play('corre');}
 }
 function flushEvents(){
   for(const ev of G.events){
@@ -950,7 +975,7 @@ function clientSync(peers){
     LOBBY=false;G=g;awaiting=false;
     for(const ev of evs){
       if(!ev||!(+ev.id>lastEv))continue; lastEv=+ev.id;
-      if(ev.type==='voice'){if(VOZ_KEYS.includes(ev.key))playEvent({type:'voice',key:ev.key,team:(+ev.team||0)&1});continue;}
+      if(ev.type==='voice'){if(VOZ_KEY_OK.test(String(ev.key)))playEvent({type:'voice',key:ev.key,team:(+ev.team||0)&1});continue;}
       playEvent({type:ev.type==='toast'?'toast':'say',seat:(+ev.seat||0)&3,text:String(ev.text||'').slice(0,40),kind:['call','accept','run'].includes(ev.kind)?ev.kind:'chat'});
     }
     if(modalKind==='lobby'&&!(ME<0))closeModal(); else refreshLobby();
@@ -1095,7 +1120,7 @@ function FakeRoom(){
       leave:async()=>{alive=false;clearInterval(hb);bc.postMessage({peer:me,bye:1});bc.close();hs.clear();}};
   }};
 }
-if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
+if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},Voz,get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
 
 initSeats(); renderSnd();
 if(window.claude&&window.claude.use)getRoomNS(); // no claude.ai já pede a sala; fora dele o Firebase só conecta quando você for jogar online
