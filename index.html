@@ -124,11 +124,16 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .sig-btn{width:44px;height:44px;border-radius:50%;background:var(--chip);font-size:22px;flex:none}
 .sig-btn:disabled{opacity:.4}
 .sig-row{position:absolute;left:12px;right:12px;bottom:12px;z-index:9;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:var(--panel);border-radius:18px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
-.sig-row button{font-size:28px;padding:8px 0;border-radius:12px;background:var(--chip)}
-.sig{position:absolute;z-index:6;font-size:24px;line-height:1;opacity:0;transform:scale(.4);transition:opacity .15s,transform .15s;pointer-events:none}
+.sig-row button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 2px;border-radius:12px;background:var(--chip);min-width:0}
+.sig-row .se{font-size:26px;line-height:1}
+.sig-row .sn{font-size:11px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.sig{position:absolute;z-index:6;display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1;opacity:0;transform:scale(.4);transition:opacity .15s,transform .15s;pointer-events:none}
 .sig.show{opacity:1;transform:scale(1)}
-.seat .sig{top:-14px;right:2px}
-.sig0{left:50%;bottom:48px;margin-left:-12px}
+.sig .se{font-size:24px}
+.sig .sn{font-size:10px;font-weight:900;background:var(--panel);color:var(--ink);padding:2px 5px;border-radius:6px;white-space:nowrap}
+.seat .sig{top:-18px;right:-6px}
+.sig0{left:50%;bottom:48px;transform:translateX(-50%) scale(.4)}
+.sig0.show{transform:translateX(-50%) scale(1)}
 .btn.deal{background:var(--gold);color:var(--btn-ink);font-family:var(--f-display);font-weight:400;font-size:19px;letter-spacing:.04em;padding:12px 24px;box-shadow:0 4px 0 var(--gold-deep);animation:pulse 1.6s ease-in-out infinite}
 .hand .card.blind{display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px;border-width:3px}
 .blind-n{background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:900;padding:3px 8px;border-radius:8px}
@@ -280,14 +285,14 @@ const tpow=(t,man)=>t.hid?-1:power(t.card,man); // carta encoberta não vale nad
 const canHide=g=>g.phase==='play'&&g.results.length>=1&&!g.ferro; // só da 2ª rodada em diante, nunca na mão de ferro
 /* Sinais de mesa: edite aqui (chave, emoji, significado). São públicos, como uma piscada na mesa. */
 const SINAIS=[
-  {k:'zap',e:'😉',t:'piscada: manilha de paus (zap)'},
-  {k:'copas',e:'🤨',t:'sobrancelha: manilha de copas'},
-  {k:'espadas',e:'😏',t:'boca torta: manilha de espadas'},
-  {k:'ouros',e:'😛',t:'língua: manilha de ouros'},
-  {k:'tres',e:'😗',t:'biquinho: tenho 3'},
-  {k:'dois',e:'😬',t:'morder o lábio: tenho 2'},
-  {k:'as',e:'🙄',t:'olhar pro céu: tenho ás'},
-  {k:'nada',e:'😑',t:'cara fechada: não tenho nada'}];
+  {k:'zap',n:'Zap',e:'😉',t:'piscada: manilha de paus (zap)'},
+  {k:'copas',n:'Copas',e:'🤨',t:'sobrancelha: manilha de copas'},
+  {k:'espadas',n:'Espadas',e:'😏',t:'boca torta: manilha de espadas'},
+  {k:'ouros',n:'Ouros',e:'😛',t:'língua: manilha de ouros'},
+  {k:'tres',n:'Tenho 3',e:'😗',t:'biquinho: tenho 3'},
+  {k:'dois',n:'Tenho 2',e:'😬',t:'morder o lábio: tenho 2'},
+  {k:'as',n:'Tenho ás',e:'🙄',t:'olhar pro céu: tenho ás'},
+  {k:'nada',n:'Nada',e:'😑',t:'cara fechada: não tenho nada'}];
 const SINAL_FORTE=new Set(['zap','copas','espadas','ouros','tres']);
 const SINAL_MS=2000;
 const VIRA_NOME={'4':'4','5':'5','6':'6','7':'7','10':'Q','11':'J','12':'K','1':'A','2':'2','3':'3'}; // nome do momento de voz por manilha
@@ -303,7 +308,7 @@ function newGame(diff){return{sigAt:[0,0,0,0],sigs:[null,null,null,null],scores:
 function startHand(g){
   g.dealer=(g.dealer+1)%4; g.handNo++;
   Object.assign(g,{hands:[[],[],[],[]],vira:null,manilha:null,value:1,lock:null,pending:null,results:[],table:[],played:[],
-    lastTrick:null,mao11:null,ferro:false,handResult:null,consult:null,peek:null,sigs:[null,null,null,null]});
+    lastTrick:null,mao11:null,ferro:false,handResult:null,consult:null,peek:null,sigs:[null,null,null,null],calls:[],bluffTried:[false,false,false,false],callRoll:[null,null,null,null]});
   const at11=[0,1].filter(t=>g.scores[t]===11);
   if(at11.length===2)g.ferro=true;
   else if(at11.length===1){g.mao11=at11[0];g.value=3;}
@@ -355,6 +360,7 @@ function actTruco(g,seat){
   g.pending={team:team(seat),value:v,seat};
   g.phase='respond';
   g.consult=v===3?{team:1-team(seat)}:null; // só no pedido inicial de truco
+  (g.calls||(g.calls=[])).push({team:team(seat),value:v});
   g.events.push({type:'say',seat,text:VALUE_LABEL[v],kind:'call'});
 }
 function actRespond(g,choice,seat){
@@ -373,6 +379,7 @@ function actRespond(g,choice,seat){
     g.value=p.value;
     const v=nextValue(p.value);
     g.pending={team:rt,value:v,seat};
+    (g.calls||(g.calls=[])).push({team:rt,value:v});
     g.events.push({type:'say',seat,text:VALUE_LABEL[v],kind:'call'});
   }else throw new Error('resposta desconhecida');
 }
@@ -457,9 +464,9 @@ function whoActs(g){
    Médio e difícil: lembram as cartas que já saíram e simulam o resto da mão
    centenas de vezes (com as cartas escondidas sorteadas) para estimar a chance de ganhar. */
 const DIFF={
-  facil:  {mc:0,  call:.80,bluff:.02,acc:.38,raise:.90,noise:.18,blunder:.4},
-  medio:  {mc:60, callP:.68,bluff:.05,raiseP:.80,respDisc:.03,noise:.08,blunder:.06},
-  dificil:{mc:260,callP:.78,bluff:.02,raiseP:.86,respDisc:.03,noise:.02,blunder:0}
+  facil:  {mc:0,  call:.80,bluff:.02,acc:.38,raise:.90,noise:.18,blunder:.4,bluffHand:.02,raiseBluff:.01,callProb:.25,sureProb:.35},
+  medio:  {mc:60, callP:.68,bluff:.05,raiseP:.80,respDisc:.03,noise:.08,blunder:.06,bluffHand:.03,raiseBluff:.02,callProb:.2,sureProb:.36},
+  dificil:{mc:260,callP:.78,bluff:.02,raiseP:.86,respDisc:.03,noise:.02,blunder:0,bluffHand:.04,raiseBluff:.025,callProb:.25,sureProb:.4}
 };
 const cfgOf=g=>DIFF[g.diff]||DIFF.medio;
 
@@ -542,40 +549,48 @@ function mcCard(g,seat,n){
   return best;
 }
 
+/* Escada de apostas: cada nível pede uma chance estimada de ganhar a mão maior que o anterior.
+   Truco (3) < seis < nove < doze (doze só com a mão praticamente ganha). */
+const LADDER={facil:{3:.86,6:.92,9:.96,12:.985},medio:{3:.80,6:.91,9:.965,12:.985},dificil:{3:.76,6:.895,9:.96,12:.98}};
+function needFor(g,t,v){
+  let n=(LADDER[g.diff]||LADDER.medio)[v]||.99;
+  if(g.scores[1-t]+v>=12)n=Math.max(n,.9); // perder essa aposta entrega o jogo: só com mão muito forte
+  return n;
+}
+function botP(g,seat,fixed){const cfg=cfgOf(g);return cfg.mc?winProb(g,seat,cfg.mc,fixed||[]):evalSeat(g,seat);}
 function botWantsTruco(g,seat){
   if(!canTruco(g,seat))return false;
   const cfg=cfgOf(g), my=team(seat), nv=nextValue(g.value);
-  if(!cfg.mc){
-    const s=evalSeat(g,seat)+(Math.random()-.5)*cfg.noise*2;
-    if(s>=cfg.call)return true;
-    if(g.scores[1-my]+nv>=12)return false;
-    return Math.random()<cfg.bluff;
-  }
   const ps=g.sigs&&g.sigs[(seat+2)%4];
-  const P=winProb(g,seat,cfg.mc)+(Math.random()-.5)*cfg.noise*2+(ps?SINAL_FORTE.has(ps)?.08:ps==='nada'?-.05:0:0); // o sinal do parceiro conta
-  if(P>=cfg.callP)return true;
-  if(g.scores[1-my]+nv>=12)return false;        // não blefa se o adversário pode fechar o jogo
-  return P<.4&&Math.random()<cfg.bluff;           // blefe de mão fraca
+  const P=botP(g,seat)+(Math.random()-.5)*cfg.noise+(ps?SINAL_FORTE.has(ps)?.04:ps==='nada'?-.04:0:0); // o sinal do parceiro conta um pouco
+  if(P>=needFor(g,my,nv)){
+    if(nv>3)return true;                           // aumentos seguem a escada
+    if(!g.callRoll)return true;
+    const k=my+(P>=.97?2:0);                       // a dupla decide uma vez por mão (mão quase ganha tem sorteio próprio)
+    if(g.callRoll[k]===null)g.callRoll[k]=Math.random()<(P>=.97?cfg.sureProb:cfg.callProb);
+    return g.callRoll[k];
+  }
+  // blefe: só no truco inicial, uma tentativa por bot por mão, e nunca se o adversário puder fechar o jogo
+  if(nv===3&&g.bluffTried&&!g.bluffTried[seat]&&P<.45&&g.scores[1-my]+3<12){
+    g.bluffTried[seat]=true;
+    if(Math.random()<cfg.bluffHand){g.why='blefe';return true;}
+  }
+  return false;
 }
 function botRespond(g,t){
   const cfg=cfgOf(g), p=g.pending, v=g.value, nv=p.value, opp=p.team;
-  if(!cfg.mc){
-    let best=-1,seat=t;
-    for(const s of [t,t+2]){const e=evalSeat(g,s);if(e>best){best=e;seat=s;}}
-    const s=best+(Math.random()-.5)*cfg.noise*2;
-    if(nv<12&&s>=cfg.raise)return{choice:'raise',seat};
-    if(s>=cfg.acc||g.scores[opp]+v>=12)return{choice:'accept',seat};
-    return{choice:'run',seat};
-  }
   let P=-1,seat=t;
-  if(g.consult&&g.consult.team===t){P=winProb(g,t,cfg.mc,[t+2]);} // consultaram as cartas um do outro
-  else for(const s of [t,t+2]){const x=winProb(g,s,cfg.mc);if(x>P){P=x;seat=s;}}
-  P=P-cfg.respDisc+(Math.random()-.5)*cfg.noise*2;   // quem pede costuma ter jogo
-  if(nv<12&&P>=cfg.raiseP)return{choice:'raise',seat};
+  if(g.consult&&g.consult.team===t){P=botP(g,t,[t+2]);} // consultaram as cartas um do outro
+  else for(const s of [t,t+2]){const x=botP(g,s);if(x>P){P=x;seat=s;}}
+  P=P-(cfg.respDisc||0)+(Math.random()-.5)*cfg.noise;   // quem pede costuma ter jogo
+  const up=nextValue(nv);
+  if(nv<12&&P>=needFor(g,t,up))return{choice:'raise',seat};
+  if(up===6&&P>=.5&&g.scores[opp]+6<12&&Math.random()<cfg.raiseBluff){g.why='blefe';return{choice:'raise',seat};} // blefe de aumento: raro e só até seis
   if(g.scores[opp]+v>=12)return{choice:'accept',seat}; // correr perderia o jogo de qualquer jeito
   let thr=(1-v/nv)/2+.04;                              // vale aceitar quando P·nv − (1−P)·nv > −v
   if(g.scores[opp]+nv>=12)thr+=.12;
   if(g.scores[t]+nv>=12)thr-=.05;
+  if((g.calls||[]).some(c=>c.team===t))thr-=.12;      // quem já pediu nesta mão não foge à toa do aumento
   return{choice:P>=thr?'accept':'run',seat};
 }
 function botMao11(g,t){
@@ -873,7 +888,7 @@ function render(){
   const sigBtn=ME>=0&&!g.ferro&&DEALT(g)&&g.phase!=='over'?`<button class="sig-btn" id="sigBtn" aria-label="Fazer sinal" aria-expanded="${sigOpen}"${sigOk?'':' disabled'}>👀</button>`:'';
   if(!sigOk)sigOpen=false;
   $('sigRow').hidden=!sigOpen;
-  if(sigOpen)$('sigRow').innerHTML=SINAIS.map(x=>`<button data-s="${x.k}" aria-label="${esc(x.t)}" title="${esc(x.t)}">${x.e}</button>`).join('');
+  if(sigOpen)$('sigRow').innerHTML=SINAIS.map(x=>`<button data-s="${x.k}" aria-label="Sinal ${esc(x.n)}: ${esc(x.t)}" title="${esc(x.t)}"><span class="se" aria-hidden="true">${x.e}</span><span class="sn">${esc(x.n)}</span></button>`).join('');
   if(pickIdx!==null){
     $('actions').innerHTML=sigBtn+'<button class="btn primary" data-p="open">Jogar</button><button class="btn ghost" data-p="hide">Esconder</button>';
   }else $('actions').innerHTML=sigBtn+dealBtn+(mine&&canTruco(g,ME)?`<button class="btn truco" id="btnTruco">${VALUE_LABEL[nextValue(g.value)].replace('!','')}</button>`:'')+`<span class="status">${statusText(g)}</span>`;
@@ -913,8 +928,9 @@ let toastTimer;
 function toast(text,ms){const el=$('toast');el.textContent=text;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),ms||1500);}
 function showSig(seat,k){
   const x=SINAIS.find(z=>z.k===k), el=$('sig'+rel(seat)); if(!x||!el)return;
-  el.textContent=x.e; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
-  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),1200);
+  el.innerHTML=`<span class="se">${x.e}</span><span class="sn">${esc(x.n)}</span>`; el.setAttribute('aria-label',`${seatName(seat)}: sinal ${x.n}`);
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),1500);
 }
 function playEvent(ev){
   if(ev.type==='toast'){toast(ev.text,1600);return;}
@@ -1258,7 +1274,7 @@ const RULES=`<details class="rules"><summary>Regras rápidas</summary><ul>
 <li>No <b>primeiro truco</b> da mão, a dupla desafiada pode ver as cartas do parceiro antes de responder. No seis, nove e doze, não.</li>
 <li><b>Mão de 11</b>: a dupla com 11 pode ver as cartas do parceiro e decide se joga, valendo 3. Sem truco.</li>
 <li><b>Esconder</b>: da 2ª rodada em diante, toque na carta e escolha Esconder (ou segure a carta). Ela vai virada, não vale nada e ninguém fica sabendo qual era.</li>
-<li><b>Sinais</b> (👀): todo mundo vê, então combine bem com o parceiro. ${SINAIS.map(x=>x.e+' '+x.t).join(' · ')}.</li>
+<li><b>Sinais</b> (👀): todo mundo vê, então combine bem com o parceiro. ${SINAIS.map(x=>x.e+' <b>'+x.n+'</b> ('+x.t+')').join(' · ')}.</li>
 <li><b>Mão de ferro</b> (11 a 11): cartas viradas para todos, até para você. Escolha às cegas; quem ganhar a mão leva o jogo.</li>
 <li>Quem fizer <b>12 pontos</b> primeiro ganha.</li></ul></details>`;
 const segHTML=()=>`<div class="seg" role="radiogroup" aria-label="Dificuldade">${[['facil','Fácil'],['medio','Médio'],['dificil','Difícil']].map(([k,l])=>`<button role="radio" aria-checked="${k===diff}" data-d="${k}">${l}</button>`).join('')}</div>`;
