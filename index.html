@@ -243,6 +243,8 @@ button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
   <footer class="actions" id="actions"></footer>
 </div>
 <div class="modal" id="modal" hidden></div>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-app-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-database-compat.js"></script>
 
 <script>
 /*ENGINE-START*/
@@ -819,24 +821,67 @@ function publish(){
   if(!RM||!IS_HOST)return;
   RM.presence({host:true,st:encode()}).catch(e=>console.warn('presença',e&&e.code,e&&e.message));
 }
+/* sala via Firebase Realtime Database (GitHub Pages e qualquer site fora do claude.ai).
+   Mesma interface da sala do claude.ai: cada aba grava sua "presença" em rooms/CODE/peers/<id>
+   (como texto JSON) e some sozinha ao desconectar (onDisconnect). */
+const FB_CONFIG={apiKey:"AIzaSyAId5S6eXO-r926yqODxW4_Ku8TH9mh3NM",authDomain:"truco-6694f.firebaseapp.com",databaseURL:"https://truco-6694f-default-rtdb.firebaseio.com",projectId:"truco-6694f",storageBucket:"truco-6694f.firebasestorage.app",messagingSenderId:"288785224060",appId:"1:288785224060:web:f954e01a241f5532c154f9"};
+function FirebaseRoom(fb){
+  const app=fb.apps&&fb.apps.length?fb.app():fb.initializeApp(FB_CONFIG);
+  const db=app.database();
+  const me='p'+Math.random().toString(36).slice(2,10);
+  let conn=false; db.ref('.info/connected').on('value',x=>{conn=!!x.val();});
+  return{kind:'firebase',join:code=>new Promise((resolve,reject)=>{
+    const base=db.ref('rooms/'+code+'/peers'), mine=base.child(me);
+    const hs=new Set(), errs=new Set(), cache=new Map();
+    let pres={}, snap=Object.freeze([]), ready=false, done=false;
+    const build=val=>{
+      const arr=[];
+      for(const [k,v] of Object.entries(val||{})){
+        const j=v&&typeof v.j==='string'?v.j:'{}';
+        let c=cache.get(k);
+        if(!c||c.j!==j){let o={};try{o=JSON.parse(j)||{};}catch(e){}
+          c={j,peer:Object.freeze({peer:k,by:null,isMe:k===me,sameTab:k===me,kind:'viewer',guest:false,presence:Object.freeze(o),updatedAt:Date.now()})};cache.set(k,c);}
+        arr.push(c.peer);
+      }
+      snap=Object.freeze(arr);
+      const ch={peers:snap,joined:[],left:[],updated:[]};
+      hs.forEach(h=>{try{h(ch);}catch(e){console.error(e);}});
+    };
+    const write=()=>mine.set({j:JSON.stringify(pres),t:fb.database.ServerValue.TIMESTAMP});
+    const api={name:code,
+      presence(patch){const next=Object.assign({},pres);for(const k in patch){if(patch[k]===null)delete next[k];else next[k]=patch[k];}pres=next;return write();},
+      peers:()=>snap,
+      onPeers(h,onErr){hs.add(h);if(onErr)errs.add(onErr);if(ready)queueMicrotask(()=>h({peers:snap,joined:snap,left:[],updated:[]}));return()=>{hs.delete(h);if(onErr)errs.delete(onErr);};},
+      connected:()=>conn,
+      async leave(){base.off();try{await mine.onDisconnect().cancel();}catch(e){}try{await mine.remove();}catch(e){}hs.clear();errs.clear();}
+    };
+    const fail=code=>{if(done)return;done=true;base.off();reject({code});};
+    const t=setTimeout(()=>fail('upstream_error'),9000);
+    mine.onDisconnect().remove();
+    write().catch(()=>fail('not_permitted'));
+    base.on('value',x=>{build(x.val());if(!ready){ready=true;}if(!done){done=true;clearTimeout(t);resolve(api);}},
+      ()=>{if(!done)fail('not_permitted');else errs.forEach(f=>f({code:'revoked',message:'sem acesso à mesa'}));});
+  })};
+}
 async function getRoomNS(){
   if(ROOMNS)return ROOMNS;
   if(FAKE){ROOMNS=FakeRoom();return ROOMNS;}
-  try{ROOMNS=window.claude&&window.claude.use?await window.claude.use('room'):null;}catch(e){ROOMNS=null;}
+  if(window.claude&&window.claude.use){try{ROOMNS=await window.claude.use('room');}catch(e){ROOMNS=null;}if(ROOMNS)return ROOMNS;} // dentro do claude.ai
+  if(window.firebase&&window.firebase.initializeApp){try{ROOMNS=FirebaseRoom(window.firebase);}catch(e){console.error(e);ROOMNS=null;}}
   return ROOMNS;
 }
-const CODE_CH='abcdefghjkmnpqrstuvwxyz23456789';
+const CODE_CH='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const randomCode=()=>Array.from({length:4},()=>CODE_CH[Math.floor(Math.random()*CODE_CH.length)]).join('');
-const normCode=v=>String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,4);
+const normCode=v=>String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,4);
 function onlineMsg(t){const m=$('onlineMsg');if(m)m.textContent=t;}
 async function enterTable(code,host){
   const inp=$('nickInp'); nick=cleanNick(inp?inp.value:nick)||('Jogador '+Math.floor(Math.random()*90+10)); store.set('truco.nick',nick);
-  if(!/^[a-z0-9]{4}$/.test(code)){onlineMsg('O código da mesa tem 4 letras ou números.');return;}
+  if(!/^[A-Z0-9]{4}$/.test(code)){onlineMsg('O código da mesa tem 4 letras ou números.');return;}
   onlineMsg('Conectando…');
   const ns=await getRoomNS();
-  if(!ns){onlineMsg('O modo online só funciona com o jogo aberto no claude.ai, com login.');return;}
-  let r; try{r=await ns.join('mesa-'+code);}
-  catch(e){onlineMsg(e&&e.code==='not_permitted'?'Sua conta não tem acesso às mesas deste jogo.':'Não consegui entrar na mesa. Tente de novo.');return;}
+  if(!ns){onlineMsg('O modo online não carregou. Confira a internet e recarregue a página.');return;}
+  let r; try{r=await ns.join(ns.kind==='firebase'?code:'mesa-'+code.toLowerCase());}
+  catch(e){onlineMsg(e&&e.code==='not_permitted'?'O servidor recusou a mesa. Tente outro código.':'Não consegui conectar na mesa. Confira a internet e tente de novo.');return;}
   clearTimeout(timer);
   RM=r;MODE='online';IS_HOST=host;CODE=code;LOBBY=true;SEATS=[null,null,null,null];G=null;ME=-1;
   lastAct={};evLog=[];evSeq=0;lastEv=0;lastGid='';lastSt=null;actN=0;awaiting=false;autoSeat=true;myWant=null;
@@ -1050,10 +1095,10 @@ function FakeRoom(){
       leave:async()=>{alive=false;clearInterval(hb);bc.postMessage({peer:me,bye:1});bc.close();hs.clear();}};
   }};
 }
-if(FAKE)window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
+if(FAKE||QS.has('test'))window.__truco={get G(){return G;},get ME(){return ME;},get awaiting(){return awaiting;},get CODE(){return CODE;},get SEATS(){return SEATS;},get modal(){return modalKind;},act:doAct,canTruco,team,enterTable,hostStart,leaveTable,requestSeat};
 
 initSeats(); renderSnd();
-getRoomNS(); // já pede a sala; ela chega depois e só é usada se você for jogar online
+if(window.claude&&window.claude.use)getRoomNS(); // no claude.ai já pede a sala; fora dele o Firebase só conecta quando você for jogar online
 G=newGame(diff); advance(G); render();
 showMenu();
 </script>
