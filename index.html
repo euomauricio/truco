@@ -259,6 +259,7 @@ function makeDeck(){const d=[];for(const r of RANKS)for(let s=0;s<4;s++)d.push({
 function manilhaOf(r){return RANKS[(RANKS.indexOf(r)+1)%RANKS.length];}
 function power(c,man){return c.r===man?10+c.s:RANKS.indexOf(c.r);}
 function nextValue(v){return v===1?3:v+3;}
+const VIRA_NOME={'4':'4','5':'5','6':'6','7':'7','10':'Q','11':'J','12':'K','1':'A','2':'2','3':'3'}; // nome do momento de voz por manilha
 
 function newGame(diff){return{scores:[0,0],dealer:Math.floor(Math.random()*4),diff,phase:'idle',events:[],handNo:0,hands:[[],[],[],[]],table:[],played:[],results:[],value:1,mao11:null,ferro:false};}
 
@@ -270,6 +271,7 @@ function startHand(g){
   g.vira=d.pop(); g.manilha=manilhaOf(g.vira.r);
   Object.assign(g,{value:1,lock:null,pending:null,results:[],table:[],played:[],lastTrick:null,mao11:null,ferro:false,handResult:null});
   g.leader=(g.dealer+1)%4; g.turn=g.leader;
+  g.events.push({type:'voice',key:'vira_'+VIRA_NOME[g.manilha]}); // anuncia a manilha
   const at11=[0,1].filter(t=>g.scores[t]===11);
   if(at11.length===2){g.ferro=true;g.phase='play';g.events.push({type:'toast',text:'Mão de ferro! Sem truco, vale 1.'});}
   else if(at11.length===1){g.mao11=at11[0];g.value=3;g.phase='mao11';g.events.push({type:'voice',key:'mao11'});}
@@ -612,9 +614,9 @@ const VOZ_RESERVA={truco:['truco_1.mp3','truco_2.mp3','truco_3.mp3'],seis:['seis
   mao11:['mao11.mp3'],ganhou_mao:['ganhou_mao.mp3'],fim_vitoria:['fim_vitoria.mp3'],fim_derrota:['fim_derrota.mp3']};
 const VOZ_CALL={'TRUCO!':'truco','SEIS!':'seis','NOVE!':'nove','DOZE!':'doze'};
 const VOZ_SEMPRE=new Set(['truco','seis','nove','doze','corre']); // sempre tocam, interrompendo o que estiver tocando
-const VOZ_KEY_OK=/^[a-z0-9_]{1,32}$/, VOZ_FILE_OK=/^[A-Za-z0-9_.-]{1,64}\.mp3$/;
+const VOZ_KEY_OK=/^[A-Za-z0-9_]{1,32}$/, VOZ_FILE_OK=/^[A-Za-z0-9_.-]{1,64}\.mp3$/;
 const Voz={
-  list:{}, a:{}, last:{}, cur:null, unlocked:false, freed:new Set(),
+  list:{}, a:{}, last:{}, cur:null, curMoment:'', next:null, unlocked:false, freed:new Set(),
   setList(obj){
     const out={};
     for(const [k,v] of Object.entries(obj||{})){
@@ -638,14 +640,20 @@ const Voz={
   },
   unlock(){this.unlocked=true;this.free();},
   busy(){const c=this.cur;return !!(c&&!c.paused&&!c.ended&&!c.muted);},
+  announcing(){return this.busy()&&this.curMoment.startsWith('vira_');},
   play(moment){
     if(!Snd.on||!this.unlocked)return;
     const files=(this.list[moment]||[]).filter(f=>this.a[f]); if(!files.length)return;
-    const force=VOZ_SEMPRE.has(moment);
-    if(this.busy()){if(!force)return;try{this.cur.pause();}catch(e){}}
+    const force=VOZ_SEMPRE.has(moment)||moment.startsWith('vira_');
+    if(this.busy()){
+      if(moment==='mao11'&&this.curMoment.startsWith('vira_')){this.next=moment;return;} // a mão de 11 fala logo depois da vira
+      if(!force)return;try{this.cur.pause();}catch(e){}
+    }
+    this.next=null; this.curMoment=moment;
     let opts=files; if(files.length>1&&this.last[moment])opts=files.filter(f=>f!==this.last[moment]);
     const f=pick(opts); this.last[moment]=f;
     const el=this.a[f]; this.cur=el;
+    el.onended=()=>{if(Voz.cur===el&&Voz.next){const n=Voz.next;Voz.next=null;Voz.play(n);}};
     try{el.muted=false;el.currentTime=0;const p=el.play();if(p)p.catch(()=>{});}catch(e){}
   },
   stop(){if(this.cur)try{this.cur.pause();}catch(e){}}
@@ -785,7 +793,10 @@ function step(){
   if(w.kind==='advance'){
     timer=setTimeout(()=>{advance(g);step();},D(g.phase==='trickDone'?1150:g.phase==='handDone'?2300:200));
   }else if(w.kind==='over'){showOver();}
-  else if(w.kind==='play'){if(isBot(w.seat))timer=setTimeout(()=>{botTurn(g,w.seat);step();},D(750));}
+  else if(w.kind==='play'){if(isBot(w.seat)){
+    const first=g.played.length===0, t0=Date.now();
+    const go=()=>{if(first&&Voz.announcing()&&Date.now()-t0<3500){timer=setTimeout(go,150);return;}botTurn(g,w.seat);step();};
+    timer=setTimeout(go,D(750));}}
   else if(w.kind==='respond'){
     const humans=[w.team,w.team+2].filter(isHumanSeat);
     if(!humans.length)timer=setTimeout(()=>{const r=botRespond(g,w.team);actRespond(g,r.choice,r.seat);step();},D(1150));

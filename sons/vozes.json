@@ -1,15 +1,114 @@
 {
-  "_como_usar": "Cada momento sorteia um arquivo da lista. Para adicionar ou trocar uma voz: coloque o .mp3 nesta pasta e ponha o nome aqui. Depois rode ./publicar.sh.",
-  "truco":       ["truco_1.mp3", "truco_2.mp3", "truco_3.mp3"],
-  "seis":        ["seis.mp3"],
-  "nove":        ["nove.mp3"],
-  "doze":        ["doze.mp3"],
-  "aceita":      ["aceita_1.mp3", "aceita_2.mp3"],
-  "corre":       ["corre_1.mp3", "corre_2.mp3", "corre_3.mp3"],
-  "zap":         ["zap_1.mp3"],
-  "manilha":     ["zap_2.mp3"],
-  "mao11":       ["mao11.mp3"],
-  "ganhou_mao":  ["ganhou_mao.mp3"],
-  "fim_vitoria": ["fim_vitoria.mp3"],
-  "fim_derrota": ["fim_derrota.mp3"]
+  "_como_usar": "Cada momento sorteia um arquivo da lista. Para adicionar ou trocar uma voz: coloque o .mp3 nesta pasta e ponha o nome aqui. Depois rode ./publicar.sh. Momentos vira_X tocam quando a vira e revelada; X e o valor da MANILHA (4,5,6,7,Q,J,K,A,2,3).",
+  "truco": [
+    "truco_1.mp3",
+    "truco_2.mp3",
+    "truco_3.mp3"
+  ],
+  "seis": [
+    "seis.mp3"
+  ],
+  "nove": [
+    "nove.mp3"
+  ],
+  "doze": [
+    "doze.mp3"
+  ],
+  "aceita": [
+    "aceita_1.mp3",
+    "aceita_2.mp3"
+  ],
+  "corre": [
+    "corre_1.mp3",
+    "corre_2.mp3",
+    "corre_3.mp3"
+  ],
+  "zap": [
+    "zap_1.mp3"
+  ],
+  "manilha": [
+    "zap_2.mp3"
+  ],
+  "mao11": [
+    "mao11.mp3"
+  ],
+  "ganhou_mao": [
+    "ganhou_mao.mp3"
+  ],
+  "fim_vitoria": [
+    "fim_vitoria.mp3"
+  ],
+  "fim_derrota": [
+    "fim_derrota.mp3"
+  ],
+  "vira_4": [
+    "vira_4_1.mp3",
+    "vira_4_2.mp3",
+    "vira_4_3.mp3",
+    "vira_4_4.mp3",
+    "vira_4_5.mp3"
+  ],
+  "vira_5": [
+    "vira_5_1.mp3",
+    "vira_5_2.mp3",
+    "vira_5_3.mp3",
+    "vira_5_4.mp3",
+    "vira_5_5.mp3"
+  ],
+  "vira_6": [
+    "vira_6_1.mp3",
+    "vira_6_2.mp3",
+    "vira_6_3.mp3",
+    "vira_6_4.mp3",
+    "vira_6_5.mp3"
+  ],
+  "vira_7": [
+    "vira_7_1.mp3",
+    "vira_7_2.mp3",
+    "vira_7_3.mp3",
+    "vira_7_4.mp3",
+    "vira_7_5.mp3"
+  ],
+  "vira_Q": [
+    "vira_Q_1.mp3",
+    "vira_Q_2.mp3",
+    "vira_Q_3.mp3",
+    "vira_Q_4.mp3",
+    "vira_Q_5.mp3"
+  ],
+  "vira_J": [
+    "vira_J_1.mp3",
+    "vira_J_2.mp3",
+    "vira_J_3.mp3",
+    "vira_J_4.mp3",
+    "vira_J_5.mp3"
+  ],
+  "vira_K": [
+    "vira_K_1.mp3",
+    "vira_K_2.mp3",
+    "vira_K_3.mp3",
+    "vira_K_4.mp3",
+    "vira_K_5.mp3"
+  ],
+  "vira_A": [
+    "vira_A_1.mp3",
+    "vira_A_2.mp3",
+    "vira_A_3.mp3",
+    "vira_A_4.mp3",
+    "vira_A_5.mp3"
+  ],
+  "vira_2": [
+    "vira_2_1.mp3",
+    "vira_2_2.mp3",
+    "vira_2_3.mp3",
+    "vira_2_4.mp3",
+    "vira_2_5.mp3"
+  ],
+  "vira_3": [
+    "vira_3_1.mp3",
+    "vira_3_2.mp3",
+    "vira_3_3.mp3",
+    "vira_3_4.mp3",
+    "vira_3_5.mp3"
+  ]
 }
