@@ -535,7 +535,16 @@ function sampleHands(g,seat,fixed){
   const known=new Set([g.vira,...g.played.filter(p=>!p.hid||p.seat===seat).map(p=>p.card)].map(ckey)); // encobertas dos outros: desconhecidas
   keep.forEach(s=>g.hands[s].forEach(c=>known.add(ckey(c))));
   const pool=shuffle(makeDeck().filter(c=>!known.has(ckey(c))));
-  return g.hands.map((h,s)=>keep.has(s)?h.slice():pool.splice(0,h.length));
+  const out=g.hands.map(()=>null);
+  if(g.hintSigs)g.hintSigs.forEach((k,s)=>{ // modo Dicas: sinais vistos na mesa puxam a carta sinalizada pra mão de quem sinalizou
+    if(!k||keep.has(s)||!g.hands[s].length)return;
+    const trust=team(s)===team(seat)?.9:.6; if(Math.random()>trust)return;
+    const want=SIG_CARD(k,g.manilha), hs=[];
+    if(want){const i=pool.findIndex(want);if(i>=0)hs.push(pool.splice(i,1)[0]);}
+    else if(k==='nada'){const weak=pool.filter(c=>power(c,g.manilha)<8);shuffle(weak).slice(0,g.hands[s].length).forEach(c=>{hs.push(c);pool.splice(pool.indexOf(c),1);});}
+    out[s]=hs;
+  });
+  return g.hands.map((h,s)=>keep.has(s)?h.slice():(out[s]||[]).concat(pool.splice(0,h.length-(out[s]||[]).length)));
 }
 function rollout(g,hands,firstIdx){
   const c={hands,table:g.table.slice(),results:g.results.slice(),manilha:g.manilha,turn:g.turn};
@@ -551,6 +560,8 @@ function rollout(g,hands,firstIdx){
   }
   return 'none';
 }
+const SIG_CARD=(k,man)=>{const ms=['ouros','espadas','copas','zap'].indexOf(k);
+  if(ms>=0)return c=>c.r===man&&c.s===ms; const r={tres:'3',dois:'2',as:'1'}[k]; return r&&r!==man?c=>c.r===r:null;};
 const credit=(r,my)=>r===my?1:r==='none'?.5:0;
 function winProb(g,seat,n,fixed=[]){
   let w=0;for(let i=0;i<n;i++)w+=credit(rollout(g,sampleHands(g,seat,fixed),null),team(seat));
@@ -858,7 +869,7 @@ function hintGame(g,v){
   const pt=(ME+2)%4;
   const hands=[0,1,2,3].map(s=>s===ME?v.own.slice():s===pt&&v.partner?v.partner.slice():Array(g.hands[s].length).fill(null));
   return{hands,table:g.table.map(t=>t.hid?{seat:t.seat,card:{r:'?',s:0},hid:true}:t),results:g.results.slice(),manilha:g.manilha,vira:g.vira,
-    played:SEEN.list.slice(),turn:g.turn,scores:g.scores.slice(),diff:'medio',phase:g.phase,ferro:g.ferro,value:g.value,lock:g.lock,pending:g.pending,mao11:g.mao11};
+    played:SEEN.list.slice(),hintSigs:(g.sigs||[]).map((k,s)=>s===ME?null:k),turn:g.turn,scores:g.scores.slice(),diff:'dificil',phase:g.phase,ferro:g.ferro,value:g.value,lock:g.lock,pending:g.pending,mao11:g.mao11};
 }
 function computeHint(g,v){
   if(ME<0||!DEALT(g)||g.phase==='over')return null;
@@ -866,7 +877,7 @@ function computeHint(g,v){
   if(!v||!v.own)return null;
   const hg=hintGame(g,v), my=team(ME), pt=(ME+2)%4, fixed=v.partner?[pt]:[], pc=x=>Math.round(x*100)+'%';
   if(g.phase==='respond'&&my!==g.pending.team){
-    const P=winProb(hg,ME,80,fixed), nv=g.pending.value, v0=g.value, up=nextValue(nv);
+    const P=winProb(hg,ME,200,fixed), nv=g.pending.value, v0=g.value, up=nextValue(nv);
     const extra=v.partner?'':' Veja as cartas do parceiro antes de decidir.';
     if(nv<12&&P>=needFor(hg,my,up))return{text:`Aumente pra ${VALUE_LABEL[up].replace('!','').toLowerCase()}: chance de ganhar a mão de ~${pc(P)}.`};
     if(g.scores[g.pending.team]+v0>=12)return{text:'Aceite: correr agora entrega o jogo.'};
@@ -875,22 +886,24 @@ function computeHint(g,v){
                  :{text:`Corra: só ~${pc(P)} de chance de ganhar a mão.${extra}`};
   }
   if(g.phase==='mao11'&&g.mao11===my){
-    const P=winProb(hg,ME,80,fixed), extra=v.partner?'':' Veja as cartas do parceiro pra decidir melhor.';
+    const P=winProb(hg,ME,200,fixed), extra=v.partner?'':' Veja as cartas do parceiro pra decidir melhor.';
     return P>=.38?{text:`Mão de 11: jogue, ~${pc(P)} de chance de ganhar.${extra}`}:{text:`Mão de 11: corra, só ~${pc(P)} de chance (entrega só 1 ponto).${extra}`};
   }
   if(g.phase!=='play'||g.turn!==ME)return null;
   const own=v.own, pw=own.map(c=>power(c,g.manilha)), low=pw.indexOf(Math.min(...pw)), tb=tableBest(hg), hide=canHide(g)?' ou esconda':'';
-  let idx,text;
-  if(!tb){idx=mcCard(hg,ME,60);text=`Você abre a rodada: sugestão ${cardName(own[idx],g.manilha)}.`;}
-  else if(tb.team===my){idx=low;text=`Seu parceiro está ganhando: jogue a menor${hide}.`;}
-  else{const beat=own.map((c,i)=>i).filter(i=>pw[i]>tb.p).sort((a,b)=>pw[a]-pw[b]);
-    if(beat.length){idx=beat[0];text=`${cardName(own[idx],g.manilha).replace(/^./,m=>m.toUpperCase())} ganha a rodada.`;}
-    else{idx=low;text=`Nenhuma carta sua ganha: jogue a menor${hide}.`;}}
+  // mesma escolha do bot difícil (simulação com 200 sorteios), explicada em palavras
+  const idx=mcCard(hg,ME,200), nm=cardName(own[idx],g.manilha), Nm=nm.replace(/^./,m=>m.toUpperCase()), hideIt=hide&&botHide(hg,ME,idx);
+  const ps=(g.sigs||[])[pt], sigTxt=ps?` (seu parceiro sinalizou ${SINAIS.find(x=>x.k===ps).n.toLowerCase()})`:'';
+  let text;
+  if(!tb)text=`Você abre a rodada: jogue ${nm}${sigTxt}.`;
+  else if(tb.team===my)text=idx===low?`Seu parceiro está ganhando: jogue a menor${hideIt?' escondida':''}.`:`Mesmo com o parceiro ganhando, vale reforçar com ${nm}.`;
+  else if(pw[idx]>tb.p)text=`${Nm} ganha a rodada.`;
+  else text=`Nenhuma carta compensa aqui: jogue ${nm}${hideIt?' escondida':''}.`;
   if(canTruco(g,ME)){
-    const P=winProb(hg,ME,60,fixed);
+    const P=winProb(hg,ME,200,fixed), need=needFor(hg,my,nextValue(g.value));
     const fortes=own.filter(c=>c.r===g.manilha||c.r==='3'||c.r==='2').sort((a,b)=>power(b,g.manilha)-power(a,g.manilha)).map(c=>c.r===g.manilha?MAN_NOME[c.s].replace('manilha de ',''):c.r);
-    if(P>=.8)text=`Mão forte (${fortes.length?fortes.join(' + '):'rodada a favor'}): bom momento pra pedir truco. `+text;
-    else if(P<.35)text='Mão fraca: evite pedir truco. '+text;
+    if(P>=need)text=`Mão forte (~${pc(P)}${fortes.length?', '+fortes.join(' + '):''}): bom momento pra pedir truco. `+text;
+    else if(P<.35)text=`Mão fraca (~${pc(P)}): evite pedir truco. `+text;
   }
   return{text,idx};
 }
